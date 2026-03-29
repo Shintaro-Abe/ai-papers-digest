@@ -1,0 +1,60 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      AWS_REGION: ap-northeast-1
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Run tests
+        run: pytest tests/unit/ -v
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.9.8"
+
+      - name: Terraform Init
+        working-directory: terraform/environments/prod
+        run: terraform init
+
+      - name: Terraform Apply
+        working-directory: terraform/environments/prod
+        run: terraform apply -auto-approve
+
+      - name: Login to ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push Docker image
+        run: |
+          ECR_URI=$(cd terraform/environments/prod && terraform output -raw ecr_repository_url)
+          docker build -t summarizer src/summarizer/
+          docker tag summarizer $ECR_URI:latest
+          docker push $ECR_URI:latest
+
+      - name: Sync static assets to S3
+        run: |
+          BUCKET=$(cd terraform/environments/prod && terraform output -raw pages_bucket_name)
+          aws s3 sync static/ s3://$BUCKET/assets/ --delete
+          CF_ID=$(cd terraform/environments/prod && terraform output -raw cloudfront_distribution_id 2>/dev/null || echo "")
+          if [ -n "$CF_ID" ]; then
+            aws cloudfront create-invalidation --distribution-id $CF_ID --paths "/assets/*"
+          fi

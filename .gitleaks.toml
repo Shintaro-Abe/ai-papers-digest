@@ -1,0 +1,90 @@
+# gitleaks configuration
+# Built-in rules (API keys, AWS keys, passwords, etc.) are enabled by default.
+# Below are additional custom rules for this project.
+
+title = "ai-papers-digest gitleaks config"
+
+# --------------------------------------------------------------------------
+# Custom Rules
+# --------------------------------------------------------------------------
+
+[[rules]]
+  id = "slack-webhook-url"
+  description = "Slack Incoming Webhook URL"
+  regex = '''https://hooks\.slack\.com/services/T[A-Z0-9]+/B[A-Z0-9]+/[a-zA-Z0-9]+'''
+  tags = ["slack", "webhook"]
+  [rules.allowlist]
+    regexes = [
+      '''T00000000''',
+      '''TXXXXXXXXX''',
+      '''TXXXXX''',
+    ]
+
+[[rules]]
+  id = "ipv4-address"
+  description = "IPv4 address (private or public)"
+  regex = '''\b(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\b'''
+  tags = ["network", "pii"]
+  [rules.allowlist]
+    regexes = [
+      '''0\.0\.0\.0''',
+      '''127\.0\.0\.1''',
+      '''169\.254\.169\.254''',
+      '''10\.0\.0\.\d+''',
+      '''localhost''',
+    ]
+
+[[rules]]
+  id = "email-address"
+  description = "Email address"
+  regex = '''[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}'''
+  tags = ["pii", "email"]
+  [rules.allowlist]
+    regexes = [
+      '''noreply@anthropic\.com''',
+      '''example\.com''',
+      '''placeholder''',
+    ]
+
+[[rules]]
+  id = "claude-oauth-token"
+  description = "Claude OAuth access token"
+  regex = '''sk-ant-oat\d{2}-[a-zA-Z0-9_\-]{40,}'''
+  tags = ["claude", "token"]
+
+[[rules]]
+  id = "claude-refresh-token"
+  description = "Claude OAuth refresh token"
+  regex = '''sk-ant-ort\d{2}-[a-zA-Z0-9_\-]{40,}'''
+  tags = ["claude", "token"]
+
+[[rules]]
+  id = "aws-account-id"
+  description = "AWS Account ID (12 digits)"
+  regex = '''\b\d{12}\b'''
+  tags = ["aws"]
+  [rules.allowlist]
+    regexes = [
+      '''1209600''',
+      '''000000000000''',
+      '''123456789012''',
+    ]
+    paths = [
+      '''terraform/environments/prod/main\.tf''',
+      '''\.terraform/''',
+    ]
+
+# --------------------------------------------------------------------------
+# Global Allowlist
+# --------------------------------------------------------------------------
+
+[allowlist]
+  paths = [
+    '''\.terraform/''',
+    '''\.terraform\.lock\.hcl''',
+    '''terraform\.tfstate''',
+    '''node_modules/''',
+    '''\.venv/''',
+    '''tests/fixtures/''',
+    '''__pycache__/''',
+  ]

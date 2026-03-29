@@ -1,0 +1,13 @@
+[
+  {
+    "externalIds": {"ArXiv": "2603.18718"},
+    "citationCount": 15,
+    "tldr": {"text": "We find that language model performance scales as a power-law with model size."}
+  },
+  {
+    "externalIds": {"ArXiv": "2603.17542"},
+    "citationCount": 3,
+    "tldr": {"text": "A revisited transformer architecture with improved attention mechanism."}
+  },
+  null
+]

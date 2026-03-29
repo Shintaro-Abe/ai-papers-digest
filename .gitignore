@@ -1,0 +1,41 @@
+# プロジェクト設定
+.claude/
+.devcontainer/
+.gitattributes
+
+# Terraform
+terraform/**/placeholder.zip
+terraform/**/*.tfvars
+terraform/**/.terraform/
+terraform/**/*.tfstate
+terraform/**/*.tfstate.backup
+terraform/**/.terraform.lock.hcl
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
+
+# Node.js
+node_modules/
+dist/
+
+# Lambda Layer ビルド成果物
+src/lambdas/layer/python/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+
+# 環境変数・シークレット
+.env
+.env.*
+
+# テスト
+.coverage
+htmlcov/
+.pytest_cache/

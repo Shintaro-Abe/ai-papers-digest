@@ -1,0 +1,2 @@
+# collector-specific dependencies (beyond layer)
+# Currently empty - all deps are in the Lambda Layer

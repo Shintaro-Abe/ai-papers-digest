@@ -1,0 +1,2 @@
+# scorer-specific dependencies (beyond layer)
+# Currently empty

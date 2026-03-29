@@ -1,0 +1,19 @@
+#!/bin/bash
+# pre-commit hook: gitleaks でシークレットをスキャン
+# ステージングされたファイルのみを対象にする
+
+set -e
+
+echo "[pre-commit] Running gitleaks scan on staged changes..."
+
+# gitleaks がインストールされているか確認
+if ! command -v gitleaks &> /dev/null; then
+  echo "[pre-commit] WARNING: gitleaks not found. Skipping secret scan."
+  echo "  Install: https://github.com/gitleaks/gitleaks#installing"
+  exit 0
+fi
+
+# ステージングされた変更のみをスキャン
+gitleaks protect --staged --config .gitleaks.toml --verbose
+
+echo "[pre-commit] No secrets detected. Proceeding with commit."

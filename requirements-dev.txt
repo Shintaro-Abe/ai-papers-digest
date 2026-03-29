@@ -1,0 +1,9 @@
+pytest
+pytest-cov
+moto[dynamodb]
+mypy
+ruff
+boto3-stubs[dynamodb,lambda,ecs,s3,secretsmanager]
+requests
+feedparser
+boto3

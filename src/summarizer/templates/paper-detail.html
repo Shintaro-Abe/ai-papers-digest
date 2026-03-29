@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{title_ja}} - AI Papers Digest</title>
+  <link rel="stylesheet" href="/assets/style.css">
+</head>
+<body>
+  <header class="header">
+    <nav class="nav">
+      <a href="/" class="nav-brand">AI Papers Digest</a>
+    </nav>
+  </header>
+
+  <main class="container">
+    <article class="paper-detail">
+      <h1 class="paper-title-ja">{{title_ja}}</h1>
+      <p class="paper-title-original">{{title_original}}</p>
+
+      <div class="paper-meta">
+        <div class="meta-item"><strong>著者:</strong> {{authors}}</div>
+        <div class="meta-item"><strong>公開日:</strong> {{date}}</div>
+        <div class="meta-item"><strong>カテゴリ:</strong> {{categories}}</div>
+        <div class="meta-stats">
+          <span class="stat">👍 {{upvotes}}</span>
+          <span class="stat">📚 引用 {{citations}}</span>
+          <span class="stat">⭐ スコア {{score}}</span>
+        </div>
+      </div>
+
+      <section class="summary-section">
+        <h2>概要</h2>
+        <p class="compact-summary">{{compact_summary}}</p>
+      </section>
+
+      <section class="detail-section">
+        <h2>詳細分析</h2>
+
+        <div class="detail-card">
+          <h3>新規性</h3>
+          <p>{{detail_novelty}}</p>
+        </div>
+
+        <div class="detail-card">
+          <h3>手法</h3>
+          <p>{{detail_method}}</p>
+        </div>
+
+        <div class="detail-card">
+          <h3>結果</h3>
+          <p>{{detail_results}}</p>
+        </div>
+
+        <div class="detail-card">
+          <h3>実用性</h3>
+          <p>{{detail_practicality}}</p>
+        </div>
+      </section>
+
+      <section class="tags-section">
+        <h2>タグ</h2>
+        <div class="tags">
+          {{tags}}
+        </div>
+      </section>
+
+      <section class="links-section">
+        <a href="{{arxiv_url}}" class="btn btn-primary" target="_blank" rel="noopener">arXiv</a>
+        {{github_link}}
+      </section>
+    </article>
+  </main>
+
+  <footer class="footer">
+    <p>&copy; AI Papers Digest</p>
+  </footer>
+</body>
+</html>

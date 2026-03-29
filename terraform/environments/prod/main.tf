@@ -1,0 +1,251 @@
+terraform {
+  required_version = ">= 1.9.0"
+
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = "~> 5.0"
+    }
+  }
+}
+
+provider "aws" {
+  region = var.aws_region
+}
+
+# --- Data Sources ---
+
+data "aws_caller_identity" "current" {}
+
+# --- Lambda Layer (placeholder zip) ---
+
+data "archive_file" "lambda_placeholder" {
+  type        = "zip"
+  output_path = "${path.module}/placeholder.zip"
+
+  source {
+    content  = "def handler(event, context): pass"
+    filename = "handler.py"
+  }
+}
+
+# --- Secrets Manager ---
+
+resource "aws_secretsmanager_secret" "slack_webhook_url" {
+  name = "ai-papers-digest/slack-webhook-url"
+  tags = var.tags
+}
+
+resource "aws_secretsmanager_secret" "semantic_scholar_api_key" {
+  name = "ai-papers-digest/semantic-scholar-api-key"
+  tags = var.tags
+}
+
+resource "aws_secretsmanager_secret" "claude_auth_token" {
+  name = "ai-papers-digest/claude-auth-token"
+  tags = var.tags
+}
+
+resource "aws_secretsmanager_secret" "slack_signing_secret" {
+  name = "ai-papers-digest/slack-signing-secret"
+  tags = var.tags
+}
+
+# --- DynamoDB ---
+
+module "dynamodb" {
+  source = "../../modules/dynamodb"
+  tags   = var.tags
+}
+
+# --- S3 + CloudFront ---
+
+module "s3_cloudfront" {
+  source      = "../../modules/s3-cloudfront"
+  bucket_name = var.pages_bucket_name
+  tags        = var.tags
+}
+
+# --- ECS ---
+
+module "ecs" {
+  source = "../../modules/ecs"
+
+  ecr_image_uri          = "${module.ecs.ecr_repository_url}:latest"
+  papers_table_name      = module.dynamodb.papers_table_name
+  summaries_table_name   = module.dynamodb.summaries_table_name
+  detail_page_base_url   = module.s3_cloudfront.detail_page_base_url
+  secrets_manager_arn    = aws_secretsmanager_secret.claude_auth_token.arn
+  dynamodb_table_arns    = [module.dynamodb.papers_table_arn, module.dynamodb.summaries_table_arn]
+  s3_bucket_arn          = module.s3_cloudfront.bucket_arn
+  s3_bucket_name         = module.s3_cloudfront.bucket_name
+  tags                   = var.tags
+}
+
+# --- Lambda: collector ---
+
+module "lambda_collector" {
+  source = "../../modules/lambda"
+
+  function_name    = "ai-papers-digest-collector"
+  timeout          = 300
+  memory_size      = 256
+  filename         = data.archive_file.lambda_placeholder.output_path
+  source_code_hash = data.archive_file.lambda_placeholder.output_base64sha256
+
+  environment_variables = {
+    PAPERS_TABLE          = module.dynamodb.papers_table_name
+    PAPER_SOURCES_TABLE   = module.dynamodb.paper_sources_table_name
+    SCORER_FUNCTION_NAME  = "ai-papers-digest-scorer"
+    S2_API_KEY_SECRET_ARN = aws_secretsmanager_secret.semantic_scholar_api_key.arn
+    TARGET_CATEGORIES     = "cs.AI,cs.CL,cs.CV,cs.LG,stat.ML"
+    LOG_LEVEL             = "INFO"
+  }
+
+  policy_statements = [
+    {
+      effect    = "Allow"
+      actions   = ["dynamodb:PutItem", "dynamodb:UpdateItem", "dynamodb:GetItem"]
+      resources = [module.dynamodb.papers_table_arn, module.dynamodb.paper_sources_table_arn]
+    },
+    {
+      effect    = "Allow"
+      actions   = ["dynamodb:Query"]
+      resources = ["${module.dynamodb.papers_table_arn}/index/*"]
+    },
+    {
+      effect    = "Allow"
+      actions   = ["lambda:InvokeFunction"]
+      resources = [module.lambda_scorer.function_arn]
+    },
+    {
+      effect    = "Allow"
+      actions   = ["secretsmanager:GetSecretValue"]
+      resources = [aws_secretsmanager_secret.semantic_scholar_api_key.arn]
+    },
+  ]
+
+  reserved_concurrent_executions = 1
+  tags                           = var.tags
+}
+
+# --- Lambda: scorer ---
+
+module "lambda_scorer" {
+  source = "../../modules/lambda"
+
+  function_name    = "ai-papers-digest-scorer"
+  timeout          = 120
+  memory_size      = 256
+  filename         = data.archive_file.lambda_placeholder.output_path
+  source_code_hash = data.archive_file.lambda_placeholder.output_base64sha256
+
+  environment_variables = {
+    PAPERS_TABLE          = module.dynamodb.papers_table_name
+    DELIVERY_LOG_TABLE    = module.dynamodb.delivery_log_table_name
+    CONFIG_TABLE          = module.dynamodb.config_table_name
+    ECS_CLUSTER           = module.ecs.cluster_name
+    ECS_TASK_DEFINITION   = module.ecs.task_definition_arn
+    ECS_SUBNETS           = join(",", module.ecs.subnet_ids)
+    ECS_SECURITY_GROUP    = module.ecs.security_group_id
+    TOP_N                 = "7"
+    LOG_LEVEL             = "INFO"
+  }
+
+  policy_statements = [
+    {
+      effect    = "Allow"
+      actions   = ["dynamodb:Query", "dynamodb:GetItem", "dynamodb:UpdateItem", "dynamodb:Scan"]
+      resources = [
+        module.dynamodb.papers_table_arn,
+        "${module.dynamodb.papers_table_arn}/index/*",
+        module.dynamodb.delivery_log_table_arn,
+        module.dynamodb.config_table_arn,
+      ]
+    },
+    {
+      effect    = "Allow"
+      actions   = ["ecs:RunTask"]
+      resources = ["arn:aws:ecs:ap-northeast-1:417338593075:task-definition/ai-papers-digest-summarizer:*"]
+    },
+    {
+      effect    = "Allow"
+      actions   = ["iam:PassRole"]
+      resources = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/ai-papers-digest-*"]
+    },
+  ]
+
+  tags = var.tags
+}
+
+# --- Lambda: deliverer ---
+
+module "lambda_deliverer" {
+  source = "../../modules/lambda"
+
+  function_name    = "ai-papers-digest-deliverer"
+  timeout          = 120
+  memory_size      = 128
+  filename         = data.archive_file.lambda_placeholder.output_path
+  source_code_hash = data.archive_file.lambda_placeholder.output_base64sha256
+
+  environment_variables = {
+    SUMMARIES_TABLE          = module.dynamodb.summaries_table_name
+    DELIVERY_LOG_TABLE       = module.dynamodb.delivery_log_table_name
+    SLACK_WEBHOOK_SECRET_ARN = aws_secretsmanager_secret.slack_webhook_url.arn
+    DETAIL_PAGE_BASE_URL     = module.s3_cloudfront.detail_page_base_url
+    LOG_LEVEL                = "INFO"
+  }
+
+  policy_statements = [
+    {
+      effect    = "Allow"
+      actions   = ["dynamodb:Query", "dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:Scan"]
+      resources = [module.dynamodb.summaries_table_arn, module.dynamodb.delivery_log_table_arn]
+    },
+    {
+      effect    = "Allow"
+      actions   = ["secretsmanager:GetSecretValue"]
+      resources = [aws_secretsmanager_secret.slack_webhook_url.arn]
+    },
+  ]
+
+  tags = var.tags
+}
+
+# --- EventBridge ---
+
+module "eventbridge" {
+  source = "../../modules/eventbridge"
+
+  collector_lambda_arn  = module.lambda_collector.function_arn
+  collector_lambda_name = module.lambda_collector.function_name
+  deliverer_lambda_arn  = module.lambda_deliverer.function_arn
+  deliverer_lambda_name = module.lambda_deliverer.function_name
+  ecs_cluster_arn       = module.ecs.cluster_arn
+  schedule_enabled      = false # 初回は無効。動作確認後に true に変更
+  tags                  = var.tags
+}
+
+# --- Monitoring ---
+
+module "monitoring" {
+  source = "../../modules/monitoring"
+
+  alert_email             = var.alert_email
+  collector_function_name = module.lambda_collector.function_name
+  scorer_function_name    = module.lambda_scorer.function_name
+  deliverer_function_name = module.lambda_deliverer.function_name
+  tags                    = var.tags
+}
+
+# --- CodeBuild ---
+
+module "codebuild" {
+  source = "../../modules/codebuild"
+
+  ecr_repository_url = module.ecs.ecr_repository_url
+  ecr_repository_arn = module.ecs.ecr_repository_arn
+  source_location    = var.github_repository_url
+  tags               = var.tags
+}

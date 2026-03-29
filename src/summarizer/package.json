@@ -1,0 +1,17 @@
+{
+  "name": "ai-papers-digest-summarizer",
+  "version": "1.0.0",
+  "description": "Fargate container for summarizing arXiv papers using Claude",
+  "main": "src/summarizer.js",
+  "scripts": {
+    "start": "node src/summarizer.js"
+  },
+  "dependencies": {
+    "@aws-sdk/client-dynamodb": "^3.600.0",
+    "@aws-sdk/lib-dynamodb": "^3.600.0",
+    "@aws-sdk/client-s3": "^3.600.0"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  }
+}
