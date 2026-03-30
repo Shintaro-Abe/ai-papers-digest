@@ -3,11 +3,10 @@
 import json
 import logging
 import os
-from datetime import datetime, timezone, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 from typing import Any
 
 import boto3
-
 import message_builder
 import slack_client
 
@@ -33,9 +32,10 @@ def _get_summaries_by_date(table_name: str, date: str) -> list[dict[str, Any]]:
     )
     items = resp.get("Items", [])
 
-    utc_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    utc_date = datetime.now(UTC).strftime("%Y-%m-%d")
     today_summaries = [
-        item for item in items
+        item
+        for item in items
         if item.get("created_at", "").startswith(date) or item.get("created_at", "").startswith(utc_date)
     ]
 
@@ -50,7 +50,7 @@ def _record_delivery(table_name: str, date: str, arxiv_id: str, message_ts: str 
             "date": date,
             "arxiv_id": arxiv_id,
             "status": "delivered",
-            "delivered_at": datetime.now(timezone.utc).isoformat(),
+            "delivered_at": datetime.now(UTC).isoformat(),
             "like_count": 0,
             "dislike_count": 0,
         }
@@ -109,9 +109,11 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
 
     return {
         "statusCode": 200,
-        "body": json.dumps({
-            "date": date,
-            "summaries_count": len(summaries),
-            "messages_posted": posted_count,
-        }),
+        "body": json.dumps(
+            {
+                "date": date,
+                "summaries_count": len(summaries),
+                "messages_posted": posted_count,
+            }
+        ),
     }

@@ -3,14 +3,13 @@
 import json
 import logging
 import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 import boto3
-from boto3.dynamodb.conditions import Attr
-
 import reaction_parser
 import slack_verifier
+from boto3.dynamodb.conditions import Attr
 
 logger = logging.getLogger()
 logger.setLevel(os.environ.get("LOG_LEVEL", "INFO"))
@@ -31,6 +30,7 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     is_base64 = event.get("isBase64Encoded", False)
     if is_base64:
         import base64
+
         body_str = base64.b64decode(body_str).decode("utf-8")
 
     headers = event.get("headers", {})
@@ -82,9 +82,7 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
 
     # --- 5. Lookup arxiv_id from delivery_log ---
     delivery_log_table = os.environ["DELIVERY_LOG_TABLE"]
-    arxiv_id = reaction_parser.lookup_arxiv_id(
-        delivery_log_table, parsed["message_ts"], dynamodb
-    )
+    arxiv_id = reaction_parser.lookup_arxiv_id(delivery_log_table, parsed["message_ts"], dynamodb)
 
     if not arxiv_id:
         logger.info("No arxiv_id found for message_ts=%s (not a paper message)", parsed["message_ts"])
@@ -95,14 +93,16 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     table = dynamodb.Table(feedback_table)
 
     if event_type == "reaction_added":
-        table.put_item(Item={
-            "user_id": parsed["user_id"],
-            "arxiv_id": arxiv_id,
-            "reaction": parsed["reaction"],
-            "slack_message_ts": parsed["message_ts"],
-            "created_at": datetime.now(timezone.utc).isoformat(),
-            "updated_at": datetime.now(timezone.utc).isoformat(),
-        })
+        table.put_item(
+            Item={
+                "user_id": parsed["user_id"],
+                "arxiv_id": arxiv_id,
+                "reaction": parsed["reaction"],
+                "slack_message_ts": parsed["message_ts"],
+                "created_at": datetime.now(UTC).isoformat(),
+                "updated_at": datetime.now(UTC).isoformat(),
+            }
+        )
         logger.info("Saved feedback: user=%s paper=%s reaction=%s", parsed["user_id"], arxiv_id, parsed["reaction"])
 
         # Update delivery_log counts
@@ -116,10 +116,12 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         except Exception:
             existing_reaction = None
 
-        table.delete_item(Key={
-            "user_id": parsed["user_id"],
-            "arxiv_id": arxiv_id,
-        })
+        table.delete_item(
+            Key={
+                "user_id": parsed["user_id"],
+                "arxiv_id": arxiv_id,
+            }
+        )
         logger.info("Deleted feedback: user=%s paper=%s", parsed["user_id"], arxiv_id)
 
         if existing_reaction:
@@ -128,9 +130,7 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     return {"statusCode": 200, "body": "ok"}
 
 
-def _update_delivery_counts(
-    table_name: str, arxiv_id: str, reaction: str, increment: bool
-) -> None:
+def _update_delivery_counts(table_name: str, arxiv_id: str, reaction: str, increment: bool) -> None:
     """Update like_count/dislike_count in delivery_log."""
     from decimal import Decimal
 
@@ -138,7 +138,13 @@ def _update_delivery_counts(
     count_field = "like_count" if reaction == "like" else "dislike_count"
     delta = Decimal("1") if increment else Decimal("-1")
 
-    logger.info("Updating delivery counts: table=%s arxiv_id=%s field=%s delta=%s", table_name, arxiv_id, count_field, delta)
+    logger.info(
+        "Updating delivery counts: table=%s arxiv_id=%s field=%s delta=%s",
+        table_name,
+        arxiv_id,
+        count_field,
+        delta,
+    )
 
     try:
         resp = table.scan(

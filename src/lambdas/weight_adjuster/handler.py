@@ -3,11 +3,10 @@
 import json
 import logging
 import os
-from datetime import datetime, timezone, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import boto3
-
 import weight_optimizer
 
 logger = logging.getLogger()
@@ -35,17 +34,19 @@ def _get_current_weights(config_table_name: str) -> dict[str, float]:
 def _save_weights(config_table_name: str, weights: dict[str, float]) -> None:
     """Save optimized weights to config table."""
     table = dynamodb.Table(config_table_name)
-    table.put_item(Item={
-        "key": "scoring_weights",
-        "value": json.dumps(weights),
-        "updated_at": datetime.now(timezone.utc).isoformat(),
-    })
+    table.put_item(
+        Item={
+            "key": "scoring_weights",
+            "value": json.dumps(weights),
+            "updated_at": datetime.now(UTC).isoformat(),
+        }
+    )
 
 
 def _get_recent_feedback(feedback_table_name: str, lookback_days: int = 28) -> list[dict[str, Any]]:
     """Fetch feedback from the past N days."""
     table = dynamodb.Table(feedback_table_name)
-    cutoff = (datetime.now(timezone.utc) - timedelta(days=lookback_days)).isoformat()
+    cutoff = (datetime.now(UTC) - timedelta(days=lookback_days)).isoformat()
 
     all_items: list[dict[str, Any]] = []
     resp = table.scan(
@@ -69,7 +70,7 @@ def _get_recent_feedback(feedback_table_name: str, lookback_days: int = 28) -> l
 def _get_recent_papers(papers_table_name: str, lookback_days: int = 28) -> list[dict[str, Any]]:
     """Fetch papers from the past N days."""
     table = dynamodb.Table(papers_table_name)
-    cutoff = (datetime.now(timezone.utc) - timedelta(days=lookback_days)).strftime("%Y-%m-%d")
+    cutoff = (datetime.now(UTC) - timedelta(days=lookback_days)).strftime("%Y-%m-%d")
 
     all_items: list[dict[str, Any]] = []
     resp = table.scan(
@@ -121,10 +122,12 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
 
     return {
         "statusCode": 200,
-        "body": json.dumps({
-            "previous_weights": current_weights,
-            "new_weights": new_weights,
-            "feedback_count": len(feedback),
-            "papers_count": len(papers),
-        }),
+        "body": json.dumps(
+            {
+                "previous_weights": current_weights,
+                "new_weights": new_weights,
+                "feedback_count": len(feedback),
+                "papers_count": len(papers),
+            }
+        ),
     }

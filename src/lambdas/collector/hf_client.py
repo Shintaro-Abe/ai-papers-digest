@@ -37,18 +37,20 @@ def fetch_daily_papers(date: str) -> list[dict[str, Any]]:
         if not arxiv_id:
             continue
 
-        papers.append({
-            "arxiv_id": arxiv_id,
-            "title": paper_data.get("title", ""),
-            "abstract": paper_data.get("summary", ""),
-            "authors": [a.get("name", "") for a in paper_data.get("authors", [])],
-            "published_date": paper_data.get("publishedAt", ""),
-            "hf_upvotes": paper_data.get("upvotes", 0),
-            "hf_ai_summary": paper_data.get("ai_summary", ""),
-            "hf_ai_keywords": paper_data.get("ai_keywords", []),
-            "github_repo": paper_data.get("githubRepo", ""),
-            "source": "huggingface",
-        })
+        papers.append(
+            {
+                "arxiv_id": arxiv_id,
+                "title": paper_data.get("title", ""),
+                "abstract": paper_data.get("summary", ""),
+                "authors": [a.get("name", "") for a in paper_data.get("authors", [])],
+                "published_date": paper_data.get("publishedAt", ""),
+                "hf_upvotes": paper_data.get("upvotes", 0),
+                "hf_ai_summary": paper_data.get("ai_summary", ""),
+                "hf_ai_keywords": paper_data.get("ai_keywords", []),
+                "github_repo": paper_data.get("githubRepo", ""),
+                "source": "huggingface",
+            }
+        )
 
     logger.info("Fetched %d papers from HF daily papers (date=%s)", len(papers), date)
     return papers
