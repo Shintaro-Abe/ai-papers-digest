@@ -7,7 +7,7 @@ const {
 
 const REGION = process.env.AWS_REGION || 'ap-northeast-1';
 const MODEL_ID = 'amazon.titan-embed-text-v2:0';
-const DIMENSION = 768;
+const DIMENSION = 1024; // Titan V2 supports: 256, 512, 1024
 
 const client = new BedrockRuntimeClient({ region: REGION });
 

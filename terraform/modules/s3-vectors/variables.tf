@@ -13,7 +13,7 @@ variable "vector_index_name" {
 variable "dimension" {
   description = "Number of dimensions for vector embeddings"
   type        = number
-  default     = 768
+  default     = 1024
 }
 
 variable "distance_metric" {
