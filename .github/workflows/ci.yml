@@ -6,6 +6,10 @@ on:
 
 permissions:
   contents: read
+  id-token: write  # OIDC トークン発行に必要
+
+env:
+  AWS_REGION: ap-northeast-1
 
 jobs:
   lint-test:
@@ -34,12 +38,14 @@ jobs:
 
   terraform-plan:
     runs-on: ubuntu-latest
-    env:
-      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-      AWS_REGION: ap-northeast-1
     steps:
       - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
 
       - uses: hashicorp/setup-terraform@v3
         with:
@@ -55,4 +61,4 @@ jobs:
 
       - name: Terraform Plan
         working-directory: terraform/environments/prod
-        run: terraform plan -var="alert_email=placeholder@example.com" -var="pages_bucket_name=placeholder-bucket"
+        run: terraform plan

@@ -354,6 +354,144 @@ resource "aws_lambda_permission" "allow_eventbridge_weight_adjuster" {
   source_arn    = aws_cloudwatch_event_rule.weekly_weight_adjuster.arn
 }
 
+# --- GitHub OIDC (CI/CD 認証) ---
+
+module "github_oidc" {
+  source = "../../modules/github-oidc"
+
+  github_org  = "Shintaro-Abe"
+  github_repo = "ai-papers-digest"
+
+  allowed_branches = ["main"]
+
+  inline_policy_json = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "TerraformState"
+        Effect = "Allow"
+        Action = [
+          "s3:GetObject",
+          "s3:PutObject",
+          "s3:ListBucket",
+        ]
+        Resource = [
+          "arn:aws:s3:::ai-papers-digest-tfstate-${data.aws_caller_identity.current.account_id}",
+          "arn:aws:s3:::ai-papers-digest-tfstate-${data.aws_caller_identity.current.account_id}/*",
+        ]
+      },
+      {
+        Sid    = "TerraformLock"
+        Effect = "Allow"
+        Action = [
+          "dynamodb:GetItem",
+          "dynamodb:PutItem",
+          "dynamodb:DeleteItem",
+        ]
+        Resource = "arn:aws:dynamodb:ap-northeast-1:${data.aws_caller_identity.current.account_id}:table/ai-papers-digest-tflock"
+      },
+      {
+        Sid    = "TerraformPlan"
+        Effect = "Allow"
+        Action = [
+          "lambda:GetFunction",
+          "lambda:GetFunctionConfiguration",
+          "lambda:ListTags",
+          "lambda:GetPolicy",
+          "lambda:ListVersionsByFunction",
+          "dynamodb:DescribeTable",
+          "dynamodb:DescribeContinuousBackups",
+          "dynamodb:ListTagsOfResource",
+          "ecs:Describe*",
+          "ecs:List*",
+          "ecr:Describe*",
+          "ecr:GetRepositoryPolicy",
+          "ecr:ListTagsForResource",
+          "s3:GetBucket*",
+          "s3:GetObject",
+          "s3:ListBucket",
+          "s3:GetEncryptionConfiguration",
+          "s3:GetLifecycleConfiguration",
+          "s3:GetAccelerateConfiguration",
+          "s3:GetBucketPolicy",
+          "s3:GetBucketVersioning",
+          "s3:GetBucketWebsite",
+          "s3:GetBucketCORS",
+          "s3:GetBucketLogging",
+          "s3:GetBucketRequestPayment",
+          "s3:GetBucketTagging",
+          "s3:GetBucketPublicAccessBlock",
+          "s3:GetBucketObjectLockConfiguration",
+          "s3:GetReplicationConfiguration",
+          "cloudfront:GetDistribution",
+          "cloudfront:ListTagsForResource",
+          "cloudfront:GetOriginAccessControl",
+          "events:Describe*",
+          "events:List*",
+          "cloudwatch:Describe*",
+          "cloudwatch:ListTagsForResource",
+          "sns:Get*",
+          "sns:ListTagsForResource",
+          "sqs:GetQueueAttributes",
+          "sqs:ListQueueTags",
+          "logs:Describe*",
+          "logs:ListTagsForResource",
+          "iam:GetRole",
+          "iam:GetRolePolicy",
+          "iam:ListRolePolicies",
+          "iam:ListAttachedRolePolicies",
+          "iam:GetPolicy",
+          "iam:GetPolicyVersion",
+          "iam:GetOpenIDConnectProvider",
+          "secretsmanager:DescribeSecret",
+          "secretsmanager:ListSecrets",
+          "ec2:Describe*",
+          "apigatewayv2:Get*",
+          "codebuild:BatchGetProjects",
+          "codebuild:ListBuilds*",
+        ]
+        Resource = "*"
+      },
+      {
+        Sid    = "ECRPush"
+        Effect = "Allow"
+        Action = [
+          "ecr:GetAuthorizationToken",
+          "ecr:BatchCheckLayerAvailability",
+          "ecr:GetDownloadUrlForLayer",
+          "ecr:BatchGetImage",
+          "ecr:PutImage",
+          "ecr:InitiateLayerUpload",
+          "ecr:UploadLayerPart",
+          "ecr:CompleteLayerUpload",
+        ]
+        Resource = "*"
+      },
+      {
+        Sid    = "S3StaticAssets"
+        Effect = "Allow"
+        Action = [
+          "s3:PutObject",
+          "s3:DeleteObject",
+          "s3:ListBucket",
+        ]
+        Resource = [
+          module.s3_cloudfront.bucket_arn,
+          "${module.s3_cloudfront.bucket_arn}/*",
+        ]
+      },
+      {
+        Sid    = "CloudFrontInvalidation"
+        Effect = "Allow"
+        Action = ["cloudfront:CreateInvalidation"]
+        Resource = "*"
+      },
+    ]
+  })
+
+  tags = var.tags
+}
+
 # --- CodeBuild ---
 
 module "codebuild" {

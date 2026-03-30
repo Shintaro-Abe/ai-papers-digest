@@ -27,3 +27,8 @@ output "slack_events_url" {
   description = "Slack Events API endpoint URL"
   value       = module.api_gateway.slack_events_url
 }
+
+output "github_actions_role_arn" {
+  description = "IAM role ARN for GitHub Actions OIDC"
+  value       = module.github_oidc.role_arn
+}
