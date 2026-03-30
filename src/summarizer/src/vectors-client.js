@@ -24,7 +24,7 @@ async function putVector(arxivId, embedding, metadata) {
   await client.send(
     new PutVectorsCommand({
       vectorBucketName: VECTOR_BUCKET,
-      vectorIndexName: VECTOR_INDEX,
+      indexName: VECTOR_INDEX,
       vectors: [
         {
           key: arxivId,
@@ -52,7 +52,7 @@ async function getVector(arxivId) {
     const response = await client.send(
       new GetVectorsCommand({
         vectorBucketName: VECTOR_BUCKET,
-        vectorIndexName: VECTOR_INDEX,
+        indexName: VECTOR_INDEX,
         keys: [arxivId],
       })
     );
@@ -78,7 +78,7 @@ async function querySimilar(embedding, topK = 5, excludeKey = null) {
     const response = await client.send(
       new QueryVectorsCommand({
         vectorBucketName: VECTOR_BUCKET,
-        vectorIndexName: VECTOR_INDEX,
+        indexName: VECTOR_INDEX,
         queryVector: { float32: embedding },
         topK: topK + (excludeKey ? 1 : 0),
       })
