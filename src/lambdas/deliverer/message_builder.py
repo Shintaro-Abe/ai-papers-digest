@@ -23,7 +23,9 @@ def build_header_message(date: str, paper_count: int, digest_url: str) -> dict[s
                 "type": "section",
                 "text": {
                     "type": "mrkdwn",
-                    "text": f"本日の注目論文 *{paper_count}本* をお届けします。\n<{digest_url}|📋 ダイジェスト一覧を見る>",
+                    "text": (
+                        f"本日の注目論文 *{paper_count}本* をお届けします。\n<{digest_url}|📋 ダイジェスト一覧を見る>"
+                    ),
                 },
             },
             {"type": "divider"},

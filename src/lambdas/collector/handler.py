@@ -3,7 +3,7 @@
 import json
 import logging
 import os
-from datetime import datetime, timezone, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 from typing import Any
 
 import boto3
@@ -44,7 +44,7 @@ def _save_papers(table_name: str, papers: list[dict[str, Any]]) -> int:
                 "s2_tldr": paper.get("s2_tldr", ""),
                 "source_count": paper.get("source_count", 1),
                 "collected_date": _today_jst(),
-                "collected_at": datetime.now(timezone.utc).isoformat(),
+                "collected_at": datetime.now(UTC).isoformat(),
             }
             # Remove empty strings for DynamoDB (optional fields)
             item = {k: v for k, v in item.items() if v != "" and v != []}
@@ -104,11 +104,13 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
 
     return {
         "statusCode": 200,
-        "body": json.dumps({
-            "date": date,
-            "hf_count": len(hf_papers),
-            "arxiv_count": len(arxiv_papers),
-            "merged_count": len(merged),
-            "saved_count": saved_count,
-        }),
+        "body": json.dumps(
+            {
+                "date": date,
+                "hf_count": len(hf_papers),
+                "arxiv_count": len(arxiv_papers),
+                "merged_count": len(merged),
+                "saved_count": saved_count,
+            }
+        ),
     }

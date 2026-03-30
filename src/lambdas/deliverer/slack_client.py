@@ -66,10 +66,12 @@ def post_messages(
     for i, msg in enumerate(messages):
         blocks = msg.get("blocks", [])
         ts = post_message(bot_token, channel_id, blocks)
-        results.append({
-            "arxiv_id": msg.get("arxiv_id"),
-            "ts": ts,
-        })
+        results.append(
+            {
+                "arxiv_id": msg.get("arxiv_id"),
+                "ts": ts,
+            }
+        )
         if i < len(messages) - 1:
             time.sleep(interval_seconds)
 

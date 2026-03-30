@@ -93,7 +93,9 @@ def optimize_weights(
 
     logger.info(
         "Optimizing weights: %d liked, %d disliked, %d total papers",
-        len(liked_papers), len(disliked_papers), len(papers),
+        len(liked_papers),
+        len(disliked_papers),
+        len(papers),
     )
 
     # Compute predictive power for each adjustable feature
@@ -103,9 +105,7 @@ def optimize_weights(
             # w4 (feedback_bonus) keeps its current weight
             raw_scores[weight_key] = current_weights.get(weight_key, 0.2)
         else:
-            raw_scores[weight_key] = compute_predictive_power(
-                liked_papers, disliked_papers, papers, feature_key
-            )
+            raw_scores[weight_key] = compute_predictive_power(liked_papers, disliked_papers, papers, feature_key)
 
     logger.info("Raw predictive scores: %s", raw_scores)
 

@@ -3,7 +3,7 @@
 import json
 import logging
 import os
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import boto3
@@ -167,10 +167,12 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
 
     return {
         "statusCode": 200,
-        "body": json.dumps({
-            "date": date,
-            "total_papers": len(papers),
-            "selected_count": len(selected),
-            "task_arn": task_arn,
-        }),
+        "body": json.dumps(
+            {
+                "date": date,
+                "total_papers": len(papers),
+                "selected_count": len(selected),
+                "task_arn": task_arn,
+            }
+        ),
     }

@@ -4,6 +4,7 @@ moto[dynamodb]
 mypy
 ruff
 boto3-stubs[dynamodb,lambda,ecs,s3,secretsmanager]
+types-requests
 requests
 feedparser
 boto3

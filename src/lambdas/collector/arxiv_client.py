@@ -60,15 +60,17 @@ def fetch_recent_papers(categories: list[str]) -> list[dict[str, Any]]:
                     continue
                 seen_ids.add(arxiv_id)
 
-                papers.append({
-                    "arxiv_id": arxiv_id,
-                    "title": entry.title.replace("\n", " ").strip(),
-                    "abstract": entry.summary.replace("\n", " ").strip(),
-                    "authors": [a.get("name", "") for a in entry.get("authors", [])],
-                    "categories": [t.get("term", "") for t in entry.get("tags", [])],
-                    "published_date": entry.get("published", ""),
-                    "source": "arxiv",
-                })
+                papers.append(
+                    {
+                        "arxiv_id": arxiv_id,
+                        "title": entry.title.replace("\n", " ").strip(),
+                        "abstract": entry.summary.replace("\n", " ").strip(),
+                        "authors": [a.get("name", "") for a in entry.get("authors", [])],
+                        "categories": [t.get("term", "") for t in entry.get("tags", [])],
+                        "published_date": entry.get("published", ""),
+                        "source": "arxiv",
+                    }
+                )
 
             logger.info("Fetched %d papers from arXiv category=%s", len(feed.entries), cat)
         except Exception:
