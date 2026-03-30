@@ -236,6 +236,39 @@ data "aws_iam_policy_document" "task" {
     ]
     resources = [var.secrets_manager_arn]
   }
+
+  # Phase 3: S3 Vectors
+  dynamic "statement" {
+    for_each = var.vector_bucket_arn != "" ? [1] : []
+    content {
+      sid    = "S3VectorsReadWrite"
+      effect = "Allow"
+      actions = [
+        "s3vectors:PutVectors",
+        "s3vectors:GetVectors",
+        "s3vectors:QueryVectors",
+        "s3vectors:DeleteVectors",
+        "s3vectors:ListVectors",
+      ]
+      resources = [
+        var.vector_bucket_arn,
+        var.vector_index_arn,
+      ]
+    }
+  }
+
+  # Phase 3: Bedrock Titan Embeddings
+  dynamic "statement" {
+    for_each = var.vector_bucket_arn != "" ? [1] : []
+    content {
+      sid    = "BedrockInvokeModel"
+      effect = "Allow"
+      actions = [
+        "bedrock:InvokeModel",
+      ]
+      resources = ["arn:aws:bedrock:ap-northeast-1::foundation-model/amazon.titan-embed-text-v2:0"]
+    }
+  }
 }
 
 resource "aws_iam_role_policy" "task" {
@@ -311,6 +344,14 @@ resource "aws_ecs_task_definition" "summarizer" {
         {
           name  = "PAGES_BUCKET"
           value = var.s3_bucket_name
+        },
+        {
+          name  = "VECTOR_BUCKET"
+          value = var.vector_bucket_name
+        },
+        {
+          name  = "VECTOR_INDEX"
+          value = "paper-embeddings"
         },
       ]
 

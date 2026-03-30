@@ -42,6 +42,24 @@ variable "s3_bucket_name" {
   type        = string
 }
 
+variable "vector_bucket_name" {
+  description = "S3 Vectors bucket name"
+  type        = string
+  default     = ""
+}
+
+variable "vector_bucket_arn" {
+  description = "S3 Vectors bucket ARN for IAM permissions"
+  type        = string
+  default     = ""
+}
+
+variable "vector_index_arn" {
+  description = "S3 Vectors index ARN for IAM permissions"
+  type        = string
+  default     = ""
+}
+
 variable "tags" {
   description = "Tags to apply to all resources"
   type        = map(string)

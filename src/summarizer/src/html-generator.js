@@ -20,8 +20,12 @@ function escapeHtml(str) {
 
 /**
  * Render a paper detail page.
+ *
+ * @param {object} paper - Paper data from DynamoDB.
+ * @param {object} summary - Summary data.
+ * @param {Array<{key: string, score: number, metadata: object}>} [similarPapers] - Similar papers from S3 Vectors.
  */
-function renderDetail(paper, summary) {
+function renderDetail(paper, summary, similarPapers) {
   const template = fs.readFileSync(
     path.join(TEMPLATES_DIR, "paper-detail.html"),
     "utf-8"
@@ -60,7 +64,30 @@ function renderDetail(paper, summary) {
     .replace(/\{\{detail_practicality\}\}/g, escapeHtml(summary.detail?.practicality || summary.detail_practicality || ""))
     .replace(/\{\{tags\}\}/g, tagsHtml)
     .replace(/\{\{arxiv_url\}\}/g, escapeHtml(arxivUrl))
-    .replace(/\{\{github_link\}\}/g, githubLinkHtml);
+    .replace(/\{\{github_link\}\}/g, githubLinkHtml)
+    .replace(/\{\{similar_papers\}\}/g, renderSimilarPapers(similarPapers));
+}
+
+/**
+ * Render the similar papers section HTML.
+ */
+function renderSimilarPapers(similarPapers) {
+  if (!similarPapers || similarPapers.length === 0) {
+    return '<p class="no-similar">まだ類似論文データがありません。</p>';
+  }
+
+  return similarPapers
+    .map((p) => {
+      const title = escapeHtml(p.metadata?.title_ja || p.key);
+      const summary = escapeHtml(p.metadata?.compact_summary || '');
+      const score = p.score != null ? `類似度: ${p.score}` : '';
+      return `<div class="similar-card">
+          <a href="/papers/${escapeHtml(p.key)}.html"><strong>${title}</strong></a>
+          <p>${summary}</p>
+          <span class="similarity">${score}</span>
+        </div>`;
+    })
+    .join('\n        ');
 }
 
 /**

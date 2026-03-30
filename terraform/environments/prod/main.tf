@@ -4,7 +4,7 @@ terraform {
   required_providers {
     aws = {
       source  = "hashicorp/aws"
-      version = "~> 5.0"
+      version = "~> 6.0"
     }
   }
 }
@@ -84,7 +84,17 @@ module "ecs" {
   dynamodb_table_arns    = [module.dynamodb.papers_table_arn, module.dynamodb.summaries_table_arn]
   s3_bucket_arn          = module.s3_cloudfront.bucket_arn
   s3_bucket_name         = module.s3_cloudfront.bucket_name
+  vector_bucket_name     = module.s3_vectors.vector_bucket_name
+  vector_bucket_arn      = module.s3_vectors.vector_bucket_arn
+  vector_index_arn       = module.s3_vectors.vector_index_arn
   tags                   = var.tags
+}
+
+# --- S3 Vectors (Phase 3) ---
+
+module "s3_vectors" {
+  source = "../../modules/s3-vectors"
+  tags   = var.tags
 }
 
 # --- Lambda: collector ---
