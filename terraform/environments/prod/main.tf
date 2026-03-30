@@ -46,6 +46,11 @@ resource "aws_secretsmanager_secret" "claude_auth_token" {
   tags = var.tags
 }
 
+resource "aws_secretsmanager_secret" "slack_bot_token" {
+  name = "ai-papers-digest/slack-bot-token"
+  tags = var.tags
+}
+
 resource "aws_secretsmanager_secret" "slack_signing_secret" {
   name = "ai-papers-digest/slack-signing-secret"
   tags = var.tags
@@ -166,7 +171,7 @@ module "lambda_scorer" {
     {
       effect    = "Allow"
       actions   = ["ecs:RunTask"]
-      resources = ["arn:aws:ecs:ap-northeast-1:417338593075:task-definition/ai-papers-digest-summarizer:*"]
+      resources = ["arn:aws:ecs:ap-northeast-1:${data.aws_caller_identity.current.account_id}:task-definition/ai-papers-digest-summarizer:*"]
     },
     {
       effect    = "Allow"
@@ -190,23 +195,24 @@ module "lambda_deliverer" {
   source_code_hash = data.archive_file.lambda_placeholder.output_base64sha256
 
   environment_variables = {
-    SUMMARIES_TABLE          = module.dynamodb.summaries_table_name
-    DELIVERY_LOG_TABLE       = module.dynamodb.delivery_log_table_name
-    SLACK_WEBHOOK_SECRET_ARN = aws_secretsmanager_secret.slack_webhook_url.arn
-    DETAIL_PAGE_BASE_URL     = module.s3_cloudfront.detail_page_base_url
-    LOG_LEVEL                = "INFO"
+    SUMMARIES_TABLE            = module.dynamodb.summaries_table_name
+    DELIVERY_LOG_TABLE         = module.dynamodb.delivery_log_table_name
+    SLACK_BOT_TOKEN_SECRET_ARN = aws_secretsmanager_secret.slack_bot_token.arn
+    SLACK_CHANNEL_ID           = "C0AQAJC41LG"
+    DETAIL_PAGE_BASE_URL       = module.s3_cloudfront.detail_page_base_url
+    LOG_LEVEL                  = "INFO"
   }
 
   policy_statements = [
     {
       effect    = "Allow"
-      actions   = ["dynamodb:Query", "dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:Scan"]
+      actions   = ["dynamodb:Query", "dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem", "dynamodb:Scan"]
       resources = [module.dynamodb.summaries_table_arn, module.dynamodb.delivery_log_table_arn]
     },
     {
       effect    = "Allow"
       actions   = ["secretsmanager:GetSecretValue"]
-      resources = [aws_secretsmanager_secret.slack_webhook_url.arn]
+      resources = [aws_secretsmanager_secret.slack_bot_token.arn]
     },
   ]
 
@@ -237,6 +243,115 @@ module "monitoring" {
   scorer_function_name    = module.lambda_scorer.function_name
   deliverer_function_name = module.lambda_deliverer.function_name
   tags                    = var.tags
+}
+
+# --- Lambda: feedback (Phase 2) ---
+
+module "lambda_feedback" {
+  source = "../../modules/lambda"
+
+  function_name    = "ai-papers-digest-feedback"
+  timeout          = 30
+  memory_size      = 128
+  filename         = data.archive_file.lambda_placeholder.output_path
+  source_code_hash = data.archive_file.lambda_placeholder.output_base64sha256
+
+  environment_variables = {
+    FEEDBACK_TABLE             = module.dynamodb.feedback_table_name
+    DELIVERY_LOG_TABLE         = module.dynamodb.delivery_log_table_name
+    SLACK_SIGNING_SECRET_ARN   = aws_secretsmanager_secret.slack_signing_secret.arn
+    LOG_LEVEL                  = "INFO"
+  }
+
+  policy_statements = [
+    {
+      effect    = "Allow"
+      actions   = ["dynamodb:PutItem", "dynamodb:DeleteItem", "dynamodb:GetItem"]
+      resources = [module.dynamodb.feedback_table_arn]
+    },
+    {
+      effect    = "Allow"
+      actions   = ["dynamodb:Scan", "dynamodb:Query", "dynamodb:UpdateItem"]
+      resources = [module.dynamodb.delivery_log_table_arn]
+    },
+    {
+      effect    = "Allow"
+      actions   = ["secretsmanager:GetSecretValue"]
+      resources = [aws_secretsmanager_secret.slack_signing_secret.arn]
+    },
+  ]
+
+  tags = var.tags
+}
+
+# --- Lambda: weight-adjuster (Phase 2) ---
+
+module "lambda_weight_adjuster" {
+  source = "../../modules/lambda"
+
+  function_name    = "ai-papers-digest-weight-adjuster"
+  timeout          = 120
+  memory_size      = 256
+  filename         = data.archive_file.lambda_placeholder.output_path
+  source_code_hash = data.archive_file.lambda_placeholder.output_base64sha256
+
+  environment_variables = {
+    FEEDBACK_TABLE = module.dynamodb.feedback_table_name
+    PAPERS_TABLE   = module.dynamodb.papers_table_name
+    CONFIG_TABLE   = module.dynamodb.config_table_name
+    LOG_LEVEL      = "INFO"
+  }
+
+  policy_statements = [
+    {
+      effect    = "Allow"
+      actions   = ["dynamodb:Scan", "dynamodb:Query"]
+      resources = [
+        module.dynamodb.feedback_table_arn,
+        "${module.dynamodb.feedback_table_arn}/index/*",
+        module.dynamodb.papers_table_arn,
+      ]
+    },
+    {
+      effect    = "Allow"
+      actions   = ["dynamodb:GetItem", "dynamodb:PutItem"]
+      resources = [module.dynamodb.config_table_arn]
+    },
+  ]
+
+  tags = var.tags
+}
+
+# --- API Gateway (Phase 2) ---
+
+module "api_gateway" {
+  source = "../../modules/api-gateway"
+
+  feedback_lambda_arn  = module.lambda_feedback.function_arn
+  feedback_lambda_name = module.lambda_feedback.function_name
+  tags                 = var.tags
+}
+
+# --- EventBridge: weekly weight adjuster (Phase 2) ---
+
+resource "aws_cloudwatch_event_rule" "weekly_weight_adjuster" {
+  name                = "ai-papers-digest-weekly-weight"
+  description         = "Weekly weight adjustment - Monday JST 5:00 (UTC 20:00 Sunday)"
+  schedule_expression = "cron(0 20 ? * SUN *)"
+  tags                = var.tags
+}
+
+resource "aws_cloudwatch_event_target" "weight_adjuster" {
+  rule = aws_cloudwatch_event_rule.weekly_weight_adjuster.name
+  arn  = module.lambda_weight_adjuster.function_arn
+}
+
+resource "aws_lambda_permission" "allow_eventbridge_weight_adjuster" {
+  statement_id  = "AllowEventBridgeInvokeWeightAdjuster"
+  action        = "lambda:InvokeFunction"
+  function_name = module.lambda_weight_adjuster.function_name
+  principal     = "events.amazonaws.com"
+  source_arn    = aws_cloudwatch_event_rule.weekly_weight_adjuster.arn
 }
 
 # --- CodeBuild ---

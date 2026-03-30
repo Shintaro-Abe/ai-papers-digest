@@ -22,3 +22,8 @@ output "codebuild_project_name" {
   description = "CodeBuild project name"
   value       = module.codebuild.project_name
 }
+
+output "slack_events_url" {
+  description = "Slack Events API endpoint URL"
+  value       = module.api_gateway.slack_events_url
+}

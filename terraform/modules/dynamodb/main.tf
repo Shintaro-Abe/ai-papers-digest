@@ -114,6 +114,44 @@ resource "aws_dynamodb_table" "paper_sources" {
 }
 
 ################################################################################
+# Feedback Table
+################################################################################
+resource "aws_dynamodb_table" "feedback" {
+  name         = "${var.table_name_prefix}-feedback"
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "user_id"
+  range_key    = "arxiv_id"
+
+  attribute {
+    name = "user_id"
+    type = "S"
+  }
+
+  attribute {
+    name = "arxiv_id"
+    type = "S"
+  }
+
+  attribute {
+    name = "created_at"
+    type = "S"
+  }
+
+  global_secondary_index {
+    name            = "paper-feedback-index"
+    hash_key        = "arxiv_id"
+    range_key       = "created_at"
+    projection_type = "ALL"
+  }
+
+  point_in_time_recovery {
+    enabled = true
+  }
+
+  tags = var.tags
+}
+
+################################################################################
 # Config Table
 ################################################################################
 resource "aws_dynamodb_table" "config" {

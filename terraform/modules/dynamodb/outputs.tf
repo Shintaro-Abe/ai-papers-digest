@@ -21,6 +21,11 @@ output "paper_sources_table_name" {
   value       = aws_dynamodb_table.paper_sources.name
 }
 
+output "feedback_table_name" {
+  description = "Name of the feedback DynamoDB table"
+  value       = aws_dynamodb_table.feedback.name
+}
+
 output "config_table_name" {
   description = "Name of the config DynamoDB table"
   value       = aws_dynamodb_table.config.name
@@ -47,6 +52,11 @@ output "delivery_log_table_arn" {
 output "paper_sources_table_arn" {
   description = "ARN of the paper_sources DynamoDB table"
   value       = aws_dynamodb_table.paper_sources.arn
+}
+
+output "feedback_table_arn" {
+  description = "ARN of the feedback DynamoDB table"
+  value       = aws_dynamodb_table.feedback.arn
 }
 
 output "config_table_arn" {

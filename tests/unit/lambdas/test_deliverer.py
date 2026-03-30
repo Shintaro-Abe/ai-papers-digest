@@ -1,10 +1,13 @@
 """Tests for deliverer Lambda components."""
 
+from unittest.mock import MagicMock, patch
+
 from src.lambdas.deliverer.message_builder import (
     build_header_message,
     build_paper_message,
     format_tags,
 )
+from src.lambdas.deliverer.slack_client import post_message
 
 
 class TestFormatTags:
@@ -50,13 +53,11 @@ class TestBuildPaperMessage:
         blocks = msg["blocks"]
         assert len(blocks) == 3  # section, actions, divider
 
-        # Section block
         text = blocks[0]["text"]["text"]
         assert "Scaling Laws" in text
         assert "スケーリング則" in text
         assert "`LLM`" in text
 
-        # Actions block
         buttons = blocks[1]["elements"]
         assert len(buttons) == 2
         assert buttons[0]["url"] == detail_url
@@ -74,3 +75,38 @@ class TestBuildPaperMessage:
         msg = build_paper_message(summary, "https://example.com/papers/2603.99999.html")
         text = msg["blocks"][0]["text"]["text"]
         assert "Test Paper" in text
+
+
+class TestPostMessage:
+    """Tests for slack_client.post_message (chat.postMessage)."""
+
+    @patch("src.lambdas.deliverer.slack_client.requests.post")
+    def test_post_message_success(self, mock_post: MagicMock) -> None:
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {"ok": True, "ts": "1234567890.123456"}
+        mock_resp.raise_for_status.return_value = None
+        mock_post.return_value = mock_resp
+
+        ts = post_message("xoxb-test", "C0TEST", [{"type": "section", "text": {"type": "mrkdwn", "text": "test"}}])
+
+        assert ts == "1234567890.123456"
+        mock_post.assert_called_once()
+        call_kwargs = mock_post.call_args
+        assert call_kwargs[1]["json"]["channel"] == "C0TEST"
+        assert "Bearer xoxb-test" in call_kwargs[1]["headers"]["Authorization"]
+
+    @patch("src.lambdas.deliverer.slack_client.requests.post")
+    def test_post_message_api_error(self, mock_post: MagicMock) -> None:
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {"ok": False, "error": "channel_not_found"}
+        mock_resp.raise_for_status.return_value = None
+        mock_post.return_value = mock_resp
+
+        ts = post_message("xoxb-test", "C0INVALID", [])
+        assert ts is None
+
+    @patch("src.lambdas.deliverer.slack_client.requests.post")
+    def test_post_message_network_error(self, mock_post: MagicMock) -> None:
+        mock_post.side_effect = Exception("Connection error")
+        ts = post_message("xoxb-test", "C0TEST", [])
+        assert ts is None

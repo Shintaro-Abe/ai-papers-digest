@@ -1,0 +1,15 @@
+variable "feedback_lambda_arn" {
+  description = "ARN of the feedback Lambda function"
+  type        = string
+}
+
+variable "feedback_lambda_name" {
+  description = "Name of the feedback Lambda function"
+  type        = string
+}
+
+variable "tags" {
+  description = "Tags to apply to all resources"
+  type        = map(string)
+  default     = {}
+}
