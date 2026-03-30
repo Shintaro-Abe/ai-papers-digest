@@ -44,6 +44,8 @@
 | 日次バッチ | Daily Batch | `daily_batch` | 毎朝実行される収集→スコアリング→要約→配信の一連のパイプライン |
 | パイプライン | Pipeline | `pipeline` | 日次バッチの処理フロー全体を指す |
 | DLQ | Dead Letter Queue | `dlq` | Lambda の処理失敗メッセージを退避する SQS キュー |
+| ベクトルバケット | Vector Bucket | `vector_bucket` | S3 Vectors のバケットタイプ。ベクトルデータの格納・クエリに特化 |
+| ベクトルインデックス | Vector Index | `vector_index` | ベクトルバケット内のインデックス。類似度検索の単位 |
 
 ## 4. ビジネス用語
 
@@ -104,3 +106,4 @@
 | IAM | Identity and Access Management | AWS の認証・認可サービス |
 | IaC | Infrastructure as Code | インフラのコード管理 |
 | PR | Pull Request | コードレビューリクエスト |
+| S3V | S3 Vectors | AWS のベクトルストアサービス（vector bucket） |

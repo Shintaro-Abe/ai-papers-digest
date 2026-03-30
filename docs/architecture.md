@@ -27,7 +27,7 @@
 | **SNS** | アラート通知 | 1 | メール通知、aws/sns マネージドキー暗号化 |
 | **SQS** | Dead Letter Queue（Lambda DLQ） | 1 | 標準キュー、SSE-SQS 暗号化有効 |
 | **API Gateway** | Slack Events API のエンドポイント | 2 | HTTP API（v2） |
-| **OpenSearch Serverless** | ベクトル検索（セマンティック検索） | 3 | ベクトルエンジンコレクション |
+| **S3 Vectors** | ベクトル検索（セマンティック検索） | 3 | vector bucket + vector index、ゼロスケール、従量課金 |
 
 ### 外部サービス
 
@@ -99,7 +99,7 @@ graph TB
 - DynamoDB: VPC エンドポイント不要（IAM 認証 + HTTPS で十分）
 
 **Phase 3 で VPC が必要になる場合:**
-- OpenSearch Serverless を VPC 内に配置する場合は、VPC + プライベートサブネット構成に移行
+- S3 Vectors は VPC 不要（AWS PrivateLink 対応だが、本アプリの規模では不要）
 
 ### ECS Fargate タスク構成
 
