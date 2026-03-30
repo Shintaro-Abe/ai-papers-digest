@@ -61,4 +61,9 @@ jobs:
 
       - name: Terraform Plan
         working-directory: terraform/environments/prod
-        run: terraform plan
+        run: |
+          terraform plan \
+            -var="alert_email=ci@example.com" \
+            -var="pages_bucket_name=ai-papers-digest-pages-${{ secrets.AWS_ACCOUNT_ID }}" \
+            -var="github_repository_url=https://github.com/${{ github.repository }}.git" \
+            -input=false
