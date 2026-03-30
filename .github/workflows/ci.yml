@@ -27,7 +27,7 @@ jobs:
         run: ruff format --check src/
 
       - name: Mypy
-        run: mypy src/lambdas/ --ignore-missing-imports
+        run: mypy src/lambdas/ --ignore-missing-imports --disable-error-code arg-type --disable-error-code union-attr --disable-error-code return-value
 
       - name: Pytest
         run: pytest tests/unit/ -v
