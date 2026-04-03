@@ -2,6 +2,7 @@
 .claude/
 .devcontainer/
 .gitattributes
+CLAUDE.md
 
 # Terraform
 terraform/**/placeholder.zip
