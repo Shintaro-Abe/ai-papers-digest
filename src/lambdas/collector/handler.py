@@ -8,7 +8,7 @@ from typing import Any
 
 import boto3
 
-from . import arxiv_client, hf_client, paper_merger, s2_client
+import arxiv_client, hf_client, paper_merger, s2_client
 
 logger = logging.getLogger()
 logger.setLevel(os.environ.get("LOG_LEVEL", "INFO"))

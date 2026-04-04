@@ -9,8 +9,8 @@ from typing import Any
 import boto3
 from boto3.dynamodb.conditions import Key
 
-from .filter import filter_papers
-from .scoring import calculate_scores
+from filter import filter_papers
+from scoring import calculate_scores
 
 logger = logging.getLogger()
 logger.setLevel(os.environ.get("LOG_LEVEL", "INFO"))

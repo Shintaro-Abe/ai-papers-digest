@@ -27,19 +27,22 @@ def _get_summaries_by_date(table_name: str, date: str) -> list[dict[str, Any]]:
     summaries_table = dynamodb.Table(table_name)
 
     resp = summaries_table.scan(
-        FilterExpression="is_active = :active",
-        ExpressionAttributeValues={":active": True},
+        FilterExpression="is_active = :active AND #d = :date",
+        ExpressionAttributeNames={"#d": "date"},
+        ExpressionAttributeValues={":active": True, ":date": date},
     )
     items = resp.get("Items", [])
 
-    utc_date = datetime.now(UTC).strftime("%Y-%m-%d")
-    today_summaries = [
-        item
-        for item in items
-        if item.get("created_at", "").startswith(date) or item.get("created_at", "").startswith(utc_date)
-    ]
+    while "LastEvaluatedKey" in resp:
+        resp = summaries_table.scan(
+            FilterExpression="is_active = :active AND #d = :date",
+            ExpressionAttributeNames={"#d": "date"},
+            ExpressionAttributeValues={":active": True, ":date": date},
+            ExclusiveStartKey=resp["LastEvaluatedKey"],
+        )
+        items.extend(resp.get("Items", []))
 
-    return today_summaries
+    return items
 
 
 def _record_delivery(table_name: str, date: str, arxiv_id: str, message_ts: str | None) -> None:
