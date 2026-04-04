@@ -115,7 +115,7 @@ resource "aws_cloudwatch_log_group" "ecs" {
 
 resource "aws_ecr_repository" "summarizer" {
   name                 = "ai-papers-digest-summarizer"
-  image_tag_mutability = "IMMUTABLE"
+  image_tag_mutability = "MUTABLE"
   force_delete         = true
 
   image_scanning_configuration {
@@ -229,10 +229,11 @@ data "aws_iam_policy_document" "task" {
   }
 
   statement {
-    sid    = "SecretsManagerRead"
+    sid    = "SecretsManagerReadWrite"
     effect = "Allow"
     actions = [
       "secretsmanager:GetSecretValue",
+      "secretsmanager:PutSecretValue",
     ]
     resources = [var.secrets_manager_arn]
   }
@@ -352,6 +353,10 @@ resource "aws_ecs_task_definition" "summarizer" {
         {
           name  = "VECTOR_INDEX"
           value = "paper-embeddings"
+        },
+        {
+          name  = "CLAUDE_SECRET_ID"
+          value = var.secrets_manager_arn
         },
       ]
 
