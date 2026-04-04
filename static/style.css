@@ -396,6 +396,34 @@ body {
 }
 
 /* ===== Responsive ===== */
+@media (max-width: 639px) {
+  .nav {
+    flex-wrap: wrap;
+    gap: 0.5rem;
+  }
+
+  .nav-links {
+    gap: 0.75rem;
+    font-size: 0.875rem;
+  }
+
+  .card-title {
+    word-break: break-word;
+  }
+
+  .card-original-title {
+    word-break: break-word;
+  }
+
+  .paper-title-ja {
+    word-break: break-word;
+  }
+
+  .tag-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 @media (min-width: 640px) {
   .container {
     padding: 2rem 1.5rem;
