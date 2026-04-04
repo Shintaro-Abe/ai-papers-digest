@@ -17,7 +17,7 @@
 |---------|------|-------|------|
 | **Lambda** | データ収集、スコアリング、Slack配信、フィードバック収集 | 1〜2 | Python 3.12, arm64 |
 | **ECS Fargate** | 要約生成（Claude CLI）+ S3 ページ生成 | 1 | スポットタスク、日次起動 |
-| **ECR** | Fargate 用 Docker イメージ管理 | 1 | プライベートリポジトリ、IMMUTABLE タグ、プッシュ時スキャン有効 |
+| **ECR** | Fargate 用 Docker イメージ管理 | 1 | プライベートリポジトリ、MUTABLE タグ（`latest` 更新用）、プッシュ時スキャン有効 |
 | **EventBridge** | 日次/週次スケジュール、ECS タスク状態変更イベント | 1〜2 | スケジュールルール + イベントルール |
 | **DynamoDB** | 論文・要約・フィードバック・設定の永続化 | 1〜2 | オンデマンドキャパシティ |
 | **S3** | 詳細ページ静的ホスティング、日次ダイジェストページ | 1 | 静的ウェブサイトホスティング |
@@ -267,31 +267,33 @@ RUN npm install -g @anthropic-ai/claude-code
 WORKDIR /app
 
 # アプリケーションコード
-COPY package.json package-lock.json ./
-RUN npm ci --production
+COPY package.json ./
+RUN npm install --production
 COPY src/ ./src/
 COPY templates/ ./templates/
 
-# ヘルスチェック用（ECS 必須ではないが推奨）
-HEALTHCHECK --interval=30s --timeout=5s CMD node -e "process.exit(0)"
-
-# エントリポイント
-ENTRYPOINT ["node", "src/summarizer.js"]
+# エントリポイント（トークン配置 → アプリ実行 → トークン書き戻し）
+COPY entrypoint.sh ./
+RUN chmod +x entrypoint.sh
+ENTRYPOINT ["./entrypoint.sh"]
 ```
 
 ### コンテナ内アプリケーション構造
 
 ```
 /app/
+├── entrypoint.sh              # トークン配置 → アプリ実行 → トークン書き戻し
 ├── src/
 │   ├── summarizer.js          # メインエントリポイント
 │   ├── claude-client.js       # claude -p ラッパー
 │   ├── dynamo-client.js       # DynamoDB 読み書き
 │   ├── s3-uploader.js         # S3 HTML アップロード
 │   ├── html-generator.js      # HTML テンプレートレンダリング
-│   └── quality-judge.js       # LLM-as-judge 品質比較
+│   ├── quality-judge.js       # LLM-as-judge 品質比較
+│   ├── embedding-client.js    # Bedrock Titan Embeddings V2（1024次元）
+│   └── vectors-client.js      # S3 Vectors 読み書き・類似検索
 ├── templates/
-│   ├── paper-detail.html      # 論文詳細ページテンプレート
+│   ├── paper-detail.html      # 論文詳細ページテンプレート（類似論文セクション含む）
 │   └── daily-digest.html      # 日次ダイジェストページテンプレート
 ├── package.json
 └── package-lock.json
@@ -323,12 +325,38 @@ function generateSummary(paperData) {
 
 ### 認証方式
 
-Claude Max プランの認証は、以下のいずれかで Fargate タスクに渡す:
+Claude Max プランの OAuth 認証トークンを Secrets Manager 経由で Fargate タスクに渡す。
 
 | 方式 | 設定 |
 |------|------|
-| **推奨: OAuth トークン** | Secrets Manager からトークンを取得し、環境変数 `CLAUDE_ACCESS_TOKEN` に設定 |
-| 代替: 設定ファイル | `~/.claude/` 配下の認証情報を Secrets Manager → EFS 経由で配置 |
+| **OAuth トークン** | Secrets Manager からトークン（`credentials.json` 全体）を取得し、環境変数 `CLAUDE_ACCESS_TOKEN` に設定 |
+
+**トークン自動リフレッシュの仕組み:**
+
+```mermaid
+sequenceDiagram
+    participant SM as Secrets Manager
+    participant EP as entrypoint.sh
+    participant CLI as Claude CLI
+    participant APP as summarizer.js
+
+    EP->>SM: GetSecretValue (CLAUDE_ACCESS_TOKEN)
+    SM-->>EP: credentials.json
+    EP->>EP: ~/.claude/.credentials.json に書き込み
+    EP->>APP: node src/summarizer.js 起動
+    APP->>CLI: claude -p (要約生成)
+    Note over CLI: accessToken 期限切れの場合<br/>refreshToken で自動リフレッシュし<br/>~/.claude/.credentials.json を更新
+    CLI-->>APP: 要約結果
+    APP-->>EP: 正常終了
+    EP->>EP: credentials.json の変更を検知
+    EP->>SM: PutSecretValue (リフレッシュ済みトークン)
+    Note over SM: 次回 Fargate 起動時は<br/>最新トークンを使用
+```
+
+- Claude CLI は `accessToken` 期限切れ時に `refreshToken` を使って自動的に新しいトークンを取得する
+- `entrypoint.sh` がタスク終了時にトークンの変更を検知し、Secrets Manager に書き戻す
+- これにより `refreshToken` が有効な限り、手動でのトークン更新は不要
+- `refreshToken` 自体が失効した場合は、ローカルで `claude auth login` を実行し Secrets Manager を手動更新する
 
 ## 5. Terraform 構成
 
@@ -372,7 +400,22 @@ terraform/
 │   │   ├── variables.tf
 │   │   └── outputs.tf
 │   │
-│   └── api-gateway/           # API Gateway（Phase 2）
+│   ├── api-gateway/           # API Gateway（Phase 2）
+│   │   ├── main.tf
+│   │   ├── variables.tf
+│   │   └── outputs.tf
+│   │
+│   ├── s3-vectors/            # S3 Vectors ベクトル検索（Phase 3）
+│   │   ├── main.tf
+│   │   ├── variables.tf
+│   │   └── outputs.tf
+│   │
+│   ├── github-oidc/           # GitHub OIDC + IAM ロール（CI/CD 認証）
+│   │   ├── main.tf
+│   │   ├── variables.tf
+│   │   └── outputs.tf
+│   │
+│   └── codebuild/             # Docker ビルド用 CodeBuild
 │       ├── main.tf
 │       ├── variables.tf
 │       └── outputs.tf
@@ -389,14 +432,10 @@ terraform/
 
 | 設定 | 値 |
 |------|-----|
-| バックエンド | S3 |
-| バケット | `ai-papers-digest-tfstate-{account_id}` |
-| キー | `prod/terraform.tfstate` |
-| DynamoDB ロック | `ai-papers-digest-tflock` |
-| リージョン | ap-northeast-1 |
-| 暗号化 | 有効（SSE-S3） |
-| バージョニング | 有効（tfstate の誤削除・破損対策） |
-| パブリックアクセス | 全ブロック |
+| バックエンド | local |
+| ステートファイル | `terraform/environments/prod/terraform.tfstate` |
+
+※ 個人利用のため S3 リモートバックエンドは使用しない
 
 ### Terraform バージョン制約
 
@@ -407,7 +446,7 @@ terraform {
   required_providers {
     aws = {
       source  = "hashicorp/aws"
-      version = "~> 5.0"
+      version = "~> 6.0"  # S3 Vectors サポートに >= 6.24 が必要
     }
   }
 }
@@ -458,11 +497,12 @@ ai-papers-digest-deliverer-role
 ```
 ai-papers-digest-summarizer-task-role
 ├── カスタムポリシー:
-│   ├── dynamodb:GetItem, Query                → papers テーブル
-│   ├── dynamodb:PutItem, UpdateItem           → summaries テーブル
+│   ├── dynamodb:GetItem, Query, Scan, PutItem, UpdateItem, BatchGetItem, BatchWriteItem → papers, summaries テーブル
 │   ├── s3:PutObject                           → 詳細ページバケット（papers/*, digest/*）
-│   ├── secretsmanager:GetSecretValue          → Claude 認証トークン
-│   └── lambda:InvokeFunction                  → deliverer Lambda（タスク完了通知用フォールバック）
+│   ├── secretsmanager:GetSecretValue          → Claude 認証トークン（起動時取得）
+│   ├── secretsmanager:PutSecretValue          → Claude 認証トークン（リフレッシュ後の書き戻し）
+│   ├── s3vectors:PutVectors, GetVectors, QueryVectors, DeleteVectors, ListVectors → S3 Vectors
+│   └── bedrock:InvokeModel                    → Bedrock Titan Embeddings V2
 ```
 
 ### Fargate タスク実行ロール
@@ -480,14 +520,15 @@ ai-papers-digest-summarizer-execution-role
 
 | シークレット名 | 用途 | 参照元 |
 |---------------|------|--------|
-| `ai-papers-digest/slack-webhook-url` | Slack Incoming Webhook URL | deliverer Lambda |
-| `ai-papers-digest/slack-signing-secret` | Slack リクエスト署名検証用 | feedback Lambda（Phase 2） |
+| `ai-papers-digest/slack-bot-token` | Slack Bot Token（chat.postMessage 用） | deliverer Lambda |
+| `ai-papers-digest/slack-signing-secret` | Slack リクエスト署名検証用 | feedback Lambda |
 | `ai-papers-digest/semantic-scholar-api-key` | Semantic Scholar API キー | collector Lambda |
-| `ai-papers-digest/claude-auth-token` | Claude Max プラン認証トークン | Fargate summarizer |
+| `ai-papers-digest/claude-auth-token` | Claude Max プラン OAuth 認証トークン（`credentials.json` 全体） | Fargate summarizer（読み書き） |
 
 **ローテーション:**
-- 自動ローテーションは設定しない（手動管理）
-- Slack トークンの有効期限切れ検知は CloudWatch Alarm で監視
+- Claude OAuth トークン: Fargate タスク実行時に自動リフレッシュ・書き戻し（`entrypoint.sh`）。`refreshToken` 失効時のみ手動更新が必要
+- Slack トークン: 手動管理。有効期限切れ検知は CloudWatch Alarm で監視
+- その他: 自動ローテーションは設定しない（手動管理）
 
 ## 8. 監視・アラート設計
 
@@ -547,19 +588,20 @@ graph LR
 
 | ワークフロー | トリガー | 内容 |
 |-------------|---------|------|
-| `ci.yml` | Pull Request | lint, test, terraform plan |
-| `deploy.yml` | main マージ | test, ECR push, terraform apply, smoke test |
-| `docker-build.yml` | Dockerfile 変更時 | Docker build + ECR push |
+| `ci.yml` | Pull Request | lint（ruff）, 型検査（mypy）, テスト（pytest）, terraform plan |
+| `deploy.yml` | main マージ | テスト, terraform apply, Lambda デプロイ, Docker build + ECR push, S3 sync |
+
+**認証方式:** GitHub OIDC + IAM ロール（一時認証情報）。長期アクセスキーは使用しない。
 
 ### デプロイ戦略
 
 | コンポーネント | デプロイ方法 |
 |--------------|------------|
-| Lambda | Terraform で関数コード（S3 経由の zip）を更新 |
+| Lambda | GitHub Actions で依存パッケージ込み zip を作成し `aws lambda update-function-code` で更新 |
 | Fargate タスク定義 | Terraform で新リビジョンを作成（次回タスク起動時に自動適用） |
-| Docker イメージ | GitHub Actions → ECR push → タスク定義更新 |
+| Docker イメージ | GitHub Actions → ECR push（`latest` タグ上書き） |
 | S3 静的アセット | GitHub Actions → `aws s3 sync` + CloudFront invalidation |
-| Terraform | `terraform apply` を GitHub Actions から実行 |
+| Terraform | `terraform apply` を GitHub Actions から実行（OIDC 認証） |
 
 ## 10. 技術的制約と判断
 
@@ -570,7 +612,7 @@ graph LR
 | API/SDK で使用不可 | Lambda から直接呼べない | ECS Fargate + `claude -p` CLI |
 | レート制限あり（具体値は非公開） | 大量の並列要約生成が困難 | 論文間に 10秒のインターバル、1日5〜10本に制限 |
 | CLI の実行にコンテナ環境が必要 | Lambda 単体では実行困難 | Fargate タスクで実行 |
-| 認証トークンの管理 | コンテナへの安全な受け渡し | Secrets Manager → 環境変数 |
+| 認証トークンの管理 | コンテナへの安全な受け渡し | Secrets Manager → 環境変数 → 自動リフレッシュ → Secrets Manager 書き戻し |
 
 ### Fargate SPOT の中断リスク
 
@@ -640,7 +682,7 @@ graph LR
 | ID | 深刻度 | 対象 | 指摘内容 | 修正内容 |
 |----|--------|------|---------|---------|
 | AWS-0030 | HIGH | ECR | イメージスキャン未有効 | `scan_on_push = true` を追加 |
-| AWS-0031 | HIGH | ECR | タグが MUTABLE | `image_tag_mutability = "IMMUTABLE"` に変更 |
+| AWS-0031 | HIGH | ECR | タグが MUTABLE | `image_tag_mutability = "MUTABLE"` に変更（`latest` タグの上書き運用のため許容） |
 | AWS-0096 ×3 | HIGH | SQS DLQ | キュー暗号化なし | `sqs_managed_sse_enabled = true` を追加 |
 | AWS-0095 | HIGH | SNS Topic | 暗号化なし | `kms_master_key_id = "alias/aws/sns"` を追加 |
 | AWS-0024 ×4 | MEDIUM | DynamoDB | PITR 未有効 | 全テーブルに `point_in_time_recovery { enabled = true }` を追加 |
