@@ -37,21 +37,21 @@ Slack Events API → API Gateway → feedback Lambda（👍/👎 収集）
 
 ## 主要機能
 
-### Phase 1: 論文収集・要約・配信
+### 論文収集・要約・配信
 
 - 3 ソース（arXiv API, HuggingFace Papers, Semantic Scholar）からの並列収集
 - スコアリング: `w1×hf_upvotes + w2×citations + w3×source_count + w4×feedback_bonus`
 - Claude Max プラン（`claude -p` CLI）による 2 層要約生成
 - Slack Bot Token + `chat.postMessage` で日次配信
 
-### Phase 2: フィードバック学習
+### フィードバック学習
 
 - Slack リアクション（👍/👎）によるフィードバック収集
 - カテゴリベースの feedback_bonus（Laplace 平滑化）
 - 週次ウェイト最適化（ベイズ平滑化 + EMA ブレンド）
 - 安全策: 最低 5 件のフィードバックがないとウェイト変更しない
 
-### Phase 3: Web ダッシュボード + セマンティック検索
+### Web ダッシュボード・セマンティック検索
 
 - Bedrock Titan Embeddings V2（1024 次元）による論文埋め込み
 - S3 Vectors でコサイン類似度検索 → 詳細ページに類似論文セクション
@@ -66,8 +66,8 @@ src/
 │   ├── collector/     #   論文収集
 │   ├── scorer/        #   スコアリング・フィルタリング
 │   ├── deliverer/     #   Slack 配信
-│   ├── feedback/      #   フィードバック収集（Phase 2）
-│   └── weight_adjuster/ # ウェイト最適化（Phase 2）
+│   ├── feedback/      #   フィードバック収集
+│   └── weight_adjuster/ # ウェイト最適化
 ├── summarizer/        # Fargate コンテナ（Node.js）
 │   ├── src/           #   要約・埋め込み・ダッシュボード生成
 │   └── templates/     #   HTML テンプレート（5 種）
