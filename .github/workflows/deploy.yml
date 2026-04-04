@@ -33,23 +33,6 @@ jobs:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: "1.9.8"
-
-      - name: Terraform Init
-        working-directory: terraform/environments/prod
-        run: terraform init
-
-      - name: Terraform Apply
-        working-directory: terraform/environments/prod
-        run: |
-          terraform apply -auto-approve \
-            -var="alert_email=deploy@example.com" \
-            -var="pages_bucket_name=ai-papers-digest-pages-${{ secrets.AWS_ACCOUNT_ID }}" \
-            -var="github_repository_url=https://github.com/${{ github.repository }}.git" \
-            -input=false
-
       - name: Package and deploy Lambda functions
         run: |
           LAMBDAS=("collector" "scorer" "deliverer" "feedback" "weight_adjuster")
@@ -77,13 +60,13 @@ jobs:
         uses: aws-actions/amazon-ecr-login@v2
 
       - name: Build and push Docker image
+        env:
+          ECR_REPOSITORY: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.ap-northeast-1.amazonaws.com/ai-papers-digest-summarizer
         run: |
-          ECR_URI=$(cd terraform/environments/prod && terraform output -raw ecr_repository_url)
           docker build -t summarizer src/summarizer/
-          docker tag summarizer $ECR_URI:latest
-          docker push $ECR_URI:latest
+          docker tag summarizer $ECR_REPOSITORY:latest
+          docker push $ECR_REPOSITORY:latest
 
       - name: Sync static assets to S3
         run: |
-          BUCKET=$(cd terraform/environments/prod && terraform output -raw pages_bucket_name)
-          aws s3 sync static/ s3://$BUCKET/assets/ --delete
+          aws s3 sync static/ s3://ai-papers-digest-pages-${{ secrets.AWS_ACCOUNT_ID }}/assets/ --delete
