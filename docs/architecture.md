@@ -570,17 +570,21 @@ ai-papers-digest-summarizer-execution-role
 
 ```mermaid
 graph LR
-    subgraph "Pull Request"
+    subgraph "Pull Request（ci.yml）"
         A[push] --> B[lint + type check]
         B --> C[unit test]
         C --> D[terraform plan]
     end
 
-    subgraph "main merge"
+    subgraph "main merge（deploy.yml）"
         E[merge] --> F[unit test]
-        F --> G[build + push ECR]
-        G --> H[terraform apply]
-        H --> I[smoke test]
+        F --> G[Lambda デプロイ]
+        G --> H[Docker build + ECR push]
+        H --> I[S3 静的アセット同期]
+    end
+
+    subgraph "ローカル（手動）"
+        J[terraform apply]
     end
 ```
 
@@ -589,19 +593,24 @@ graph LR
 | ワークフロー | トリガー | 内容 |
 |-------------|---------|------|
 | `ci.yml` | Pull Request | lint（ruff）, 型検査（mypy）, テスト（pytest）, terraform plan |
-| `deploy.yml` | main マージ | テスト, terraform apply, Lambda デプロイ, Docker build + ECR push, S3 sync |
+| `deploy.yml` | main マージ | テスト, Lambda デプロイ, Docker build + ECR push, S3 sync |
 
 **認証方式:** GitHub OIDC + IAM ロール（一時認証情報）。長期アクセスキーは使用しない。
+
+**Terraform の運用:**
+- `terraform apply` は deploy.yml に含めず、**ローカルで手動実行**する
+- バックエンドが local のため、GitHub Actions と tfstate の競合を避ける設計
+- `ci.yml` では `terraform plan` による差分チェックのみ実施
 
 ### デプロイ戦略
 
 | コンポーネント | デプロイ方法 |
 |--------------|------------|
 | Lambda | GitHub Actions で依存パッケージ込み zip を作成し `aws lambda update-function-code` で更新 |
-| Fargate タスク定義 | Terraform で新リビジョンを作成（次回タスク起動時に自動適用） |
+| Fargate タスク定義 | ローカルで `terraform apply` により新リビジョンを作成（次回タスク起動時に自動適用） |
 | Docker イメージ | GitHub Actions → ECR push（`latest` タグ上書き） |
-| S3 静的アセット | GitHub Actions → `aws s3 sync` + CloudFront invalidation |
-| Terraform | `terraform apply` を GitHub Actions から実行（OIDC 認証） |
+| S3 静的アセット | GitHub Actions → `aws s3 sync` |
+| Terraform | ローカルで手動実行（インフラ変更時のみ） |
 
 ## 10. 技術的制約と判断
 
