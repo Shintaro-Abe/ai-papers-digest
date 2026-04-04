@@ -44,33 +44,29 @@
     return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   }
 
-  function doSearch() {
-    var query = input.value.trim();
-    if (!idx || !papers) return;
+  /**
+   * Substring match fallback for Japanese text.
+   * lunr.js tokenizes on whitespace, so Japanese phrases without spaces
+   * won't match via lunr. This provides a simple substring search.
+   */
+  function substringSearch(query) {
+    if (!papers) return [];
+    var q = query.toLowerCase();
+    return papers.filter(function (p) {
+      return (p.title_ja && p.title_ja.toLowerCase().indexOf(q) !== -1) ||
+        (p.title && p.title.toLowerCase().indexOf(q) !== -1) ||
+        (p.compact_summary && p.compact_summary.toLowerCase().indexOf(q) !== -1) ||
+        (p.tags && p.tags.toLowerCase().indexOf(q) !== -1);
+    });
+  }
 
-    if (query.length < 2) {
-      resultsEl.innerHTML = '';
-      statusEl.textContent = papers.length + ' papers indexed.';
-      return;
-    }
-
-    var results;
-    try {
-      results = idx.search(query + '*');
-    } catch (e) {
-      results = idx.search(query);
-    }
-
-    statusEl.textContent = results.length + ' results found.';
-
-    if (results.length === 0) {
+  function renderResults(matchedPapers) {
+    if (matchedPapers.length === 0) {
       resultsEl.innerHTML = '<p class="no-similar">No results found.</p>';
       return;
     }
 
-    var html = results.slice(0, 30).map(function (r) {
-      var p = papersById[r.ref];
-      if (!p) return '';
+    var html = matchedPapers.slice(0, 30).map(function (p) {
       var tags = p.tags ? p.tags.split(' ').map(function (t) {
         return '<span class="tag">' + escapeHtml(t) + '</span>';
       }).join(' ') : '';
@@ -85,5 +81,45 @@
     }).join('');
 
     resultsEl.innerHTML = html;
+  }
+
+  function doSearch() {
+    var query = input.value.trim();
+    if (!papers) return;
+
+    if (query.length < 2) {
+      resultsEl.innerHTML = '';
+      statusEl.textContent = papers.length + ' papers indexed.';
+      return;
+    }
+
+    // Try lunr first (good for English and tokenized terms)
+    var lunrResults = [];
+    if (idx) {
+      try {
+        lunrResults = idx.search(query + '*');
+      } catch (e) {
+        try { lunrResults = idx.search(query); } catch (e2) { /* ignore */ }
+      }
+    }
+
+    // Convert lunr results to paper objects
+    var lunrPapers = lunrResults.map(function (r) { return papersById[r.ref]; }).filter(Boolean);
+
+    // Fallback: substring search for Japanese text
+    var subPapers = substringSearch(query);
+
+    // Merge: lunr results first, then substring matches not already included
+    var seen = {};
+    var merged = [];
+    lunrPapers.concat(subPapers).forEach(function (p) {
+      if (!seen[p.id]) {
+        seen[p.id] = true;
+        merged.push(p);
+      }
+    });
+
+    statusEl.textContent = merged.length + ' results found.';
+    renderResults(merged);
   }
 })();
