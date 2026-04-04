@@ -7,6 +7,7 @@ const { renderDetail, renderDigest } = require('./html-generator');
 const { upload } = require('./s3-uploader');
 const { generateEmbedding } = require('./embedding-client');
 const { putVector, getVector, querySimilar } = require('./vectors-client');
+const { generate: generateDashboard } = require('./dashboard-generator');
 
 /**
  * Sleep for the given number of milliseconds.
@@ -156,6 +157,16 @@ async function main() {
     console.error(`[summarizer] Failed to generate digest: ${err.message}`);
     console.error(err.stack);
     process.exit(1);
+  }
+
+  // ===== Dashboard generation =====
+  try {
+    console.log(`[summarizer] Generating dashboard pages...`);
+    await generateDashboard(targetDate);
+  } catch (err) {
+    console.error(`[summarizer] Failed to generate dashboard: ${err.message}`);
+    console.error(err.stack);
+    // Non-fatal: don't exit, just log
   }
 
   console.log(

@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>{{date}} - AI Papers Digest</title>
+  <title>Search - AI Papers Digest</title>
   <link rel="stylesheet" href="/assets/style.css">
 </head>
 <body>
@@ -18,16 +18,21 @@
   </header>
 
   <main class="container">
-    <h1 class="digest-heading">{{date}} のAI論文ダイジェスト</h1>
-    <p class="digest-count">{{paper_count}} 件の論文</p>
+    <h1 class="digest-heading">Search</h1>
 
-    <div class="paper-list">
-{{paper_cards}}
+    <div class="search-container">
+      <input type="text" id="search-input" class="search-input" placeholder="Search papers..." autofocus>
     </div>
+
+    <div id="search-results" class="paper-list"></div>
+    <div id="search-status" class="search-status"></div>
   </main>
 
   <footer class="footer">
     <p>&copy; AI Papers Digest</p>
   </footer>
+
+  <script src="https://unpkg.com/lunr@2.3.9/lunr.min.js"></script>
+  <script src="/assets/search.js"></script>
 </body>
 </html>

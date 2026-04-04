@@ -304,6 +304,97 @@ body {
   font-style: italic;
 }
 
+/* ===== Navigation Links ===== */
+.nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.nav-links {
+  display: flex;
+  gap: 1rem;
+}
+
+.nav-links a {
+  color: var(--color-text-secondary);
+  text-decoration: none;
+  font-size: 0.9375rem;
+  font-weight: 500;
+}
+
+.nav-links a:hover {
+  color: var(--color-primary);
+}
+
+/* ===== Tag Grid ===== */
+.tag-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 0.75rem;
+}
+
+.tag-link-card {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  text-decoration: none;
+  color: var(--color-text);
+  transition: box-shadow 0.2s ease;
+}
+
+.tag-link-card:hover {
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+}
+
+.tag-name {
+  font-weight: 500;
+  color: var(--color-primary);
+}
+
+.tag-count {
+  font-size: 0.8125rem;
+  color: var(--color-text-secondary);
+}
+
+/* ===== Card Meta ===== */
+.card-meta {
+  margin-bottom: 0.5rem;
+}
+
+.card-date {
+  font-size: 0.8125rem;
+  color: var(--color-text-secondary);
+}
+
+/* ===== Search ===== */
+.search-container {
+  margin-bottom: 1.5rem;
+}
+
+.search-input {
+  width: 100%;
+  padding: 0.75rem 1rem;
+  font-size: 1rem;
+  border: 2px solid var(--color-border);
+  border-radius: var(--radius);
+  outline: none;
+  transition: border-color 0.2s ease;
+}
+
+.search-input:focus {
+  border-color: var(--color-primary);
+}
+
+.search-status {
+  color: var(--color-text-secondary);
+  font-size: 0.875rem;
+  margin-top: 0.5rem;
+}
+
 /* ===== Responsive ===== */
 @media (min-width: 640px) {
   .container {
