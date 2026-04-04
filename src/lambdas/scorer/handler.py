@@ -60,6 +60,32 @@ def _get_papers_by_date(papers_table_name: str, date: str) -> list[dict[str, Any
     return items
 
 
+def _get_recent_feedback(feedback_table_name: str | None, lookback_days: int = 28) -> list[dict[str, Any]]:
+    """Fetch recent feedback for category preference computation."""
+    if not feedback_table_name:
+        return []
+    table = dynamodb.Table(feedback_table_name)
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=lookback_days)).isoformat()
+
+    items: list[dict[str, Any]] = []
+    try:
+        resp = table.scan(
+            FilterExpression="created_at >= :cutoff",
+            ExpressionAttributeValues={":cutoff": cutoff},
+        )
+        items.extend(resp.get("Items", []))
+        while "LastEvaluatedKey" in resp:
+            resp = table.scan(
+                FilterExpression="created_at >= :cutoff",
+                ExpressionAttributeValues={":cutoff": cutoff},
+                ExclusiveStartKey=resp["LastEvaluatedKey"],
+            )
+            items.extend(resp.get("Items", []))
+    except Exception:
+        logger.warning("Failed to fetch feedback data")
+    return items
+
+
 def _get_delivered_ids(delivery_log_table_name: str, lookback_days: int = 30) -> set[str]:
     """Fetch arXiv IDs that have been delivered in the past N days."""
     table = dynamodb.Table(delivery_log_table_name)
@@ -125,6 +151,7 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     papers_table = os.environ["PAPERS_TABLE"]
     delivery_log_table = os.environ["DELIVERY_LOG_TABLE"]
     config_table = os.environ["CONFIG_TABLE"]
+    feedback_table = os.environ.get("FEEDBACK_TABLE")
 
     # 1. Load weights
     weights = _get_weights(config_table)
@@ -135,8 +162,12 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         logger.warning("No papers found for date=%s", date)
         return {"statusCode": 200, "body": "No papers to score"}
 
-    # 3. Calculate scores
-    scored = calculate_scores(papers, weights)
+    # 3. Load feedback data for category-based scoring
+    feedback_data = _get_recent_feedback(feedback_table)
+    paper_lookup = {p["arxiv_id"]: p for p in papers} if feedback_data else None
+
+    # 4. Calculate scores
+    scored = calculate_scores(papers, weights, feedback_data or None, paper_lookup)
 
     # 4. Get delivered IDs
     delivered_ids = _get_delivered_ids(delivery_log_table)

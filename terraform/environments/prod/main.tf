@@ -163,6 +163,7 @@ module "lambda_scorer" {
     ECS_TASK_DEFINITION   = module.ecs.task_definition_arn
     ECS_SUBNETS           = join(",", module.ecs.subnet_ids)
     ECS_SECURITY_GROUP    = module.ecs.security_group_id
+    FEEDBACK_TABLE        = module.dynamodb.feedback_table_name
     TOP_N                 = "7"
     LOG_LEVEL             = "INFO"
   }
@@ -176,6 +177,7 @@ module "lambda_scorer" {
         "${module.dynamodb.papers_table_arn}/index/*",
         module.dynamodb.delivery_log_table_arn,
         module.dynamodb.config_table_arn,
+        module.dynamodb.feedback_table_arn,
       ]
     },
     {
