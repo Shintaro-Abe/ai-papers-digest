@@ -165,7 +165,7 @@ async function generate(currentDate) {
 
   for (const [tag, papers] of tagMap) {
     const tagPageHtml = renderTagPage(tag, papers);
-    await upload(`tags/${encodeURIComponent(tag)}.html`, tagPageHtml);
+    await upload(`tags/${tag}.html`, tagPageHtml);
   }
 
   // 2. Search index + page
