@@ -2,6 +2,7 @@
 .claude/
 .devcontainer/
 .gitattributes
+.steering/
 CLAUDE.md
 
 # Terraform
