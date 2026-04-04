@@ -382,6 +382,7 @@ Fargate タスクの `entrypoint.sh` に以下の仕組みを実装済み：
 | Lambda に依存パッケージが未デプロイ | Lambda 実行エラー | deploy.yml に Lambda パッケージング + デプロイステップを追加 | **解決済み** |
 | Lambda の相対インポートが動作しない | Lambda 起動エラー | `from .` → 絶対インポートに修正（collector, scorer） | **解決済み** |
 | Deliverer が日付外の要約も配信 | 重複配信 | `created_at` ではなく `date` フィールドでフィルタするよう修正 | **解決済み** |
+| GitHub Actions の Docker build が amd64 | Fargate ARM64 で exec format error | deploy.yml から Docker build を削除し CodeBuild（ARM_CONTAINER）でビルド | **解決済み** |
 | lunr.js が日本語トークナイズに非対応 | 日本語検索の精度が低い | TinySegmenter を lunr.js のトークナイザーとして追加 | 未着手 |
 | search-index.json のサイズ増大（1年後 ~2,500件） | 初回ロード遅延 | 圧縮（gzip）+ 直近3ヶ月のみインデックス化、古い分は月別分割 | 未着手 |
 
@@ -395,10 +396,12 @@ Fargate タスクの `entrypoint.sh` に以下の仕組みを実装済み：
 |---------|------|
 | テスト | `pytest tests/unit/` |
 | Lambda デプロイ | 5関数の zip パッケージング + `aws lambda update-function-code` |
-| Docker ビルド | ECR push（`latest` タグ上書き） |
+| Docker ビルド | CodeBuild トリガー → ARM64 ビルド → ECR push（`latest` タグ上書き） |
 | S3 同期 | `aws s3 sync static/` |
 
-**理由:** Terraform バックエンドが local のため、GitHub Actions と tfstate が競合する。インフラ変更はローカルで手動 `terraform apply` を実行する。
+**理由:**
+- Terraform: バックエンドが local のため、GitHub Actions と tfstate が競合する。インフラ変更はローカルで手動 `terraform apply` を実行する。
+- Docker: GitHub Actions は x86_64 でビルドするため、ARM64 の Fargate タスクで `exec format error` になる。CodeBuild（`ARM_CONTAINER`）でネイティブ ARM64 イメージをビルドする。
 
 ### ECR タグ設定
 
