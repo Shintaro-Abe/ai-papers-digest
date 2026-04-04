@@ -147,7 +147,7 @@ graph LR
 | S3 バージョニング | 無効（静的生成ページのため不要） |
 | S3 ライフサイクル | 90日経過 → S3 Intelligent-Tiering に移行（古いページのコスト最適化） |
 | CloudFront オリジン | S3（OAC 使用） |
-| キャッシュポリシー | CachingOptimized（TTL: 24h） |
+| キャッシュポリシー | CachingDisabled（個人利用・低トラフィック・日次更新のためキャッシュ不要） |
 | 価格クラス | PriceClass_200（東京エッジロケーションを含む最小クラス） |
 | 地理的制限 | 許可リスト: JP のみ（個人利用・日本からのアクセス限定） |
 | デフォルトルートオブジェクト | index.html |
@@ -157,16 +157,21 @@ graph LR
 ```
 s3://ai-papers-digest-pages-{account_id}/
 ├── index.html                          # トップページ（最新ダイジェストへリダイレクト）
+├── search.html                         # 検索ページ（lunr.js クライアントサイド検索）
+├── search-index.json                   # lunr.js 用全文検索インデックス
 ├── assets/
 │   ├── style.css                       # 共通スタイルシート
-│   └── logo.svg                        # ロゴ
+│   └── search.js                       # 検索ロジック（lunr.js）
 ├── digest/
-│   ├── 2026-03-27.html                 # 日次ダイジェストページ
-│   ├── 2026-03-26.html
+│   ├── 2026-04-04.html                 # 日次ダイジェストページ
 │   └── ...
-└── papers/
-    ├── 2603.18718.html                 # 論文詳細ページ
-    ├── 2603.17542.html
+├── papers/
+│   ├── 2604.02002.html                 # 論文詳細ページ（類似論文セクション付き）
+│   └── ...
+└── tags/
+    ├── index.html                      # タグ一覧ページ
+    ├── LLM.html                        # タグ別論文一覧
+    ├── 強化学習.html
     └── ...
 ```
 

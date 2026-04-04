@@ -56,40 +56,44 @@
 - [x] OIDC ロールに `lambda:UpdateFunctionCode` 権限追加
 - [x] deploy.yml 全ステップ成功を確認済み
 
-## Step 4: ダッシュボードページ生成
+## Step 4: ダッシュボードページ生成 ✅ 完了
 
-- [ ] 4.1 `src/summarizer/src/dashboard-generator.js` 実装
+- [x] 4.1 `src/summarizer/src/dashboard-generator.js` 実装
   - DynamoDB から全 summaries 取得
-  - タグ集計
+  - タグ集計（48タグ）
   - 各種ページ生成 + S3 アップロード
-- [ ] 4.2 テンプレート作成
+- [x] 4.2 テンプレート作成
   - `src/summarizer/templates/tag-list.html`（タグ一覧）
   - `src/summarizer/templates/tag-page.html`（タグ別論文一覧）
   - `src/summarizer/templates/search.html`（検索ページ）
-- [ ] 4.3 `src/summarizer/templates/daily-digest.html` 更新
+- [x] 4.3 `src/summarizer/templates/daily-digest.html` 更新
   - ヘッダーにタグ一覧・検索ページへのナビゲーション追加
-- [ ] 4.4 `index.html` のリダイレクトロジック更新
-- [ ] 4.5 summarizer.js にダッシュボード生成ステップを追加
+  - `paper-detail.html` にも同様のナビゲーション追加
+- [x] 4.4 `index.html` のリダイレクトロジック更新
+  - dashboard-generator.js が最新日付のダイジェストへリダイレクトする index.html を生成
+- [x] 4.5 summarizer.js にダッシュボード生成ステップを追加
 
-## Step 5: クライアントサイド検索
+## Step 5: クライアントサイド検索 ✅ 完了
 
-- [ ] 5.1 `static/search.js` 実装
+- [x] 5.1 `static/search.js` 実装
   - lunr.js で search-index.json をロード
-  - 日本語トークナイズ対応（TinySegmenter）
-  - インクリメンタル検索 + 結果表示
-- [ ] 5.2 dashboard-generator.js に search-index.json 生成を追加
-- [ ] 5.3 検索ページの動作確認
+  - デバウンス付きインクリメンタル検索 + ワイルドカード対応
+  - 最大30件の結果表示
+- [x] 5.2 dashboard-generator.js に search-index.json 生成を追加
+- [x] 5.3 検索ページの動作確認
+- [x] 5.4 CSS 追加（ナビリンク、タググリッド、検索入力、カードメタ）
 
-## Step 6: 統合テスト・デプロイ
+## Step 6: 統合テスト・デプロイ ✅ 完了
 
-- [ ] 6.1 Docker イメージ再ビルド + ECR プッシュ
-- [ ] 6.2 Fargate タスク手動実行で E2E 確認
+- [x] 6.1 Docker イメージ再ビルド + ECR プッシュ（CodeBuild）
+- [x] 6.2 Fargate タスク手動実行で E2E 確認
   - 埋め込み生成 → S3 Vectors 保存 → 類似論文取得 → HTML 生成
-  - ダッシュボードページ（トップ、タグ一覧、検索）が S3 にアップロードされること
-- [ ] 6.3 CloudFront 経由で全ページにアクセスできることを確認
+  - ダッシュボードページ（トップ、タグ一覧 48件、検索）が S3 にアップロード確認
+  - トークン自動リフレッシュ → Secrets Manager 書き戻し確認
+- [x] 6.3 CloudFront 経由で全ページにアクセスできることを確認
   - 詳細ページの類似論文セクション
-  - タグ一覧・タグ別ページ
-  - 検索ページでキーワード検索
-- [ ] 6.4 モバイル表示の確認
-- [ ] 6.5 コミット・プッシュ
-- [ ] 6.6 docs/ 更新（Phase 3 完了を反映）
+  - タグ一覧・タグ別ページ（日本語タグ含む）
+  - 検索ページ
+- [x] 6.4 CloudFront キャッシュ無効化（CachingDisabled に変更）
+- [x] 6.5 コミット・プッシュ
+- [x] 6.6 docs/ 更新（Phase 3 完了を反映）← 本タスク

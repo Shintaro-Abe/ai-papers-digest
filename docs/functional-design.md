@@ -135,9 +135,13 @@ sequenceDiagram
         ECS->>DDB: 論文データ読取
         ECS->>ECS: claude -p で要約生成(2層)
         ECS->>DDB: summaries に保存
+        ECS->>ECS: Bedrock Titan V2 で埋め込み生成(1024次元)
+        ECS->>S3: S3 Vectors にベクトル保存
         ECS->>S3: 詳細HTMLページをアップロード
     end
 
+    ECS->>S3: 類似論文クエリ → 詳細ページ再生成(類似論文付き)
+    ECS->>S3: ダッシュボード生成(タグ一覧/タグ別/検索/index)
     ECS->>L3: 非同期呼び出し
     L3->>DDB: 当日のコンパクト要約読取
     L3->>SL: コンパクト要約+詳細リンク投稿
