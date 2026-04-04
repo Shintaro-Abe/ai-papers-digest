@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/sh
 set -e
 
 # CLAUDE_ACCESS_TOKEN 環境変数から ~/.claude/.credentials.json を動的生成
