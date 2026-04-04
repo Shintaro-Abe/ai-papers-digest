@@ -64,24 +64,28 @@ src/
 │   │   ├── weight_optimizer.py        #   ウェイト最適化ロジック
 │   │   └── requirements.txt
 │   │
-│   └── layer/                         # Lambda Layer（共通依存パッケージ）
-│       ├── requirements.txt           #   feedparser, requests 等
-│       └── build.sh                   #   Layer ビルドスクリプト
 │
 ├── summarizer/                        # Fargate 要約生成コンテナ（Node.js）
 │   ├── Dockerfile                     #   コンテナイメージ定義
+│   ├── entrypoint.sh                  #   エントリポイント（トークン配置・書き戻し）
+│   ├── buildspec.yml                  #   CodeBuild ビルド仕様
 │   ├── package.json                   #   npm 依存定義
-│   ├── package-lock.json
 │   ├── src/
 │   │   ├── summarizer.js              #   メインエントリポイント
 │   │   ├── claude-client.js           #   claude -p CLI ラッパー
 │   │   ├── dynamo-client.js           #   DynamoDB 読み書き
 │   │   ├── s3-uploader.js             #   S3 HTML アップロード
 │   │   ├── html-generator.js          #   HTML テンプレートレンダリング
-│   │   └── quality-judge.js           #   LLM-as-judge 品質比較
+│   │   ├── quality-judge.js           #   LLM-as-judge 品質比較
+│   │   ├── embedding-client.js        #   Bedrock Titan Embeddings V2（1024次元）【Phase 3】
+│   │   ├── vectors-client.js          #   S3 Vectors 読み書き・類似検索【Phase 3】
+│   │   └── dashboard-generator.js     #   ダッシュボードページ生成【Phase 3】
 │   └── templates/
-│       ├── paper-detail.html          #   論文詳細ページテンプレート
-│       └── daily-digest.html          #   日次ダイジェストページテンプレート
+│       ├── paper-detail.html          #   論文詳細ページテンプレート（類似論文付き）
+│       ├── daily-digest.html          #   日次ダイジェストページテンプレート
+│       ├── tag-list.html              #   タグ一覧ページテンプレート【Phase 3】
+│       ├── tag-page.html              #   タグ別論文一覧テンプレート【Phase 3】
+│       └── search.html                #   検索ページテンプレート【Phase 3】
 │
 └── shared/                            # 共有ユーティリティ
     └── constants.py                   #   定数定義（テーブル名プレフィックス、カテゴリ一覧等）
@@ -126,8 +130,23 @@ terraform/
 │   │   ├── variables.tf
 │   │   └── outputs.tf
 │   │
-│   └── api-gateway/                   # API Gateway【Phase 2】
-│       ├── main.tf                    #   HTTP API、ルート、スロットリング
+│   ├── api-gateway/                   # API Gateway【Phase 2】
+│   │   ├── main.tf                    #   HTTP API、ルート、スロットリング
+│   │   ├── variables.tf
+│   │   └── outputs.tf
+│   │
+│   ├── s3-vectors/                    # S3 Vectors ベクトル検索【Phase 3】
+│   │   ├── main.tf                    #   vector bucket、vector index（1024次元、cosine）
+│   │   ├── variables.tf
+│   │   └── outputs.tf
+│   │
+│   ├── github-oidc/                   # GitHub OIDC + IAM ロール
+│   │   ├── main.tf                    #   OIDC プロバイダー、IAM ロール
+│   │   ├── variables.tf
+│   │   └── outputs.tf
+│   │
+│   └── codebuild/                     # Docker ビルド用 CodeBuild
+│       ├── main.tf                    #   ARM64 ビルドプロジェクト
 │       ├── variables.tf
 │       └── outputs.tf
 │
@@ -136,7 +155,7 @@ terraform/
         ├── main.tf                    # モジュール呼び出し・結合
         ├── variables.tf
         ├── terraform.tfvars           # 変数値（.gitignore 対象）
-        └── backend.tf                 # S3 バックエンド設定
+        └── backend.tf                 # local バックエンド設定
 ```
 
 ### `tests/` — テストコード
@@ -145,22 +164,17 @@ terraform/
 tests/
 ├── unit/                              # ユニットテスト
 │   ├── lambdas/
-│   │   ├── test_collector.py          #   collector 関数のテスト
-│   │   ├── test_scorer.py             #   scorer 関数のテスト
-│   │   ├── test_deliverer.py          #   deliverer 関数のテスト
-│   │   └── conftest.py                #   共通フィクスチャ（DynamoDB モック等）
+│   │   ├── test_collector.py          #   collector 関数のテスト（10件）
+│   │   ├── test_scorer.py             #   scorer 関数のテスト（12件）
+│   │   ├── test_deliverer.py          #   deliverer 関数のテスト（9件）
+│   │   ├── test_feedback.py           #   feedback 関数のテスト（8件）【Phase 2】
+│   │   ├── test_weight_adjuster.py    #   weight_adjuster のテスト（11件）【Phase 2】
+│   │   └── conftest.py                #   共通フィクスチャ（環境変数、モック等）
 │   └── summarizer/
-│       ├── claude-client.test.js      #   Claude CLI ラッパーのテスト
-│       ├── html-generator.test.js     #   HTML 生成のテスト
-│       └── quality-judge.test.js      #   品質比較のテスト
-│
-├── integration/                       # 統合テスト
-│   ├── test_pipeline.py               #   パイプライン E2E テスト
-│   └── test_slack_delivery.py         #   Slack 配信テスト
+│       ├── html-generator.test.js     #   HTML 生成のテスト（39件）
+│       └── dashboard-generator.test.js #  ダッシュボード生成のテスト（27件）【Phase 3】
 │
 └── fixtures/                          # テスト用固定データ
-    ├── sample_paper.json              #   サンプル論文データ
-    ├── arxiv_response.xml             #   arXiv API レスポンス例
     ├── hf_daily_papers.json           #   HF Daily Papers レスポンス例
     └── s2_batch_response.json         #   Semantic Scholar バッチレスポンス例
 ```
@@ -169,12 +183,9 @@ tests/
 
 ```
 .github/
-├── workflows/
-│   ├── ci.yml                         # PR 時: lint, test, terraform plan
-│   ├── deploy.yml                     # main マージ時: test, ECR push, terraform apply
-│   └── docker-build.yml               # Dockerfile 変更時: build + ECR push
-│
-└── CODEOWNERS                         # コードオーナー設定
+└── workflows/
+    ├── ci.yml                         # PR 時: lint, test, terraform plan
+    └── deploy.yml                     # main マージ時: test, Lambda デプロイ, CodeBuild トリガー, S3 sync
 ```
 
 ### `docs/` — 永続的ドキュメント
@@ -186,15 +197,16 @@ docs/
 ├── architecture.md                    # 技術仕様書
 ├── repository-structure.md            # リポジトリ構造定義書（本ファイル）
 ├── development-guidelines.md          # 開発ガイドライン
-└── glossary.md                        # ユビキタス言語定義
+├── glossary.md                        # ユビキタス言語定義
+└── secrets-setup.md                   # シークレット設定手順
 ```
 
 ### `static/` — S3 静的アセット
 
 ```
 static/
-├── style.css                          # 詳細ページ共通スタイルシート
-└── logo.svg                           # ロゴ
+├── style.css                          # 共通スタイルシート（モバイルレスポンシブ対応）
+└── search.js                          # クライアントサイド検索（lunr.js + 日本語部分文字列検索）
 ```
 
 ## 3. ファイル配置ルール
@@ -207,7 +219,7 @@ static/
 | `src/summarizer/` | Node.js 22 | ECS Fargate | Claude CLI 要約生成 + HTML 生成 |
 | `src/shared/` | Python | - | Lambda 間で共有する定数・ユーティリティ |
 | `terraform/` | HCL | Terraform | インフラ定義のみ（アプリコードは含めない） |
-| `tests/` | Python / JavaScript | pytest / Jest | テストコードのみ |
+| `tests/` | Python / JavaScript | pytest / node:test | テストコードのみ |
 | `static/` | CSS / SVG | - | S3 にデプロイする静的アセット |
 
 ### Lambda 関数の構成ルール
@@ -224,7 +236,7 @@ src/lambdas/{function_name}/
 **ルール:**
 - `handler.py` の `handler(event, context)` がエントリポイント
 - 外部 API クライアントは `{service}_client.py` として分離
-- Lambda Layer の共通パッケージ（feedparser, requests）は `requirements.txt` に含めない
+- 外部依存パッケージ（feedparser, requests）は `requirements.txt` に記載し、デプロイ時に zip に同梱
 - `boto3` は Lambda ランタイム同梱のため `requirements.txt` に含めない
 
 ### Terraform モジュールの構成ルール
@@ -281,7 +293,11 @@ terraform/modules/{module_name}/
 .devcontainer/
 .gitattributes
 
+# Claude Code
+CLAUDE.md
+
 # Terraform
+terraform/**/placeholder.zip
 terraform/**/*.tfvars
 terraform/**/.terraform/
 terraform/**/*.tfstate
@@ -329,4 +345,10 @@ htmlcov/
 | `src/lambdas/weight_adjuster/` | - | o | o |
 | `src/summarizer/` | o | o | o |
 | `terraform/modules/api-gateway/` | - | o | o |
+| `terraform/modules/s3-vectors/` | - | - | o |
+| `terraform/modules/github-oidc/` | - | - | o |
+| `terraform/modules/codebuild/` | - | - | o |
+| `src/summarizer/src/embedding-client.js` | - | - | o |
+| `src/summarizer/src/vectors-client.js` | - | - | o |
+| `src/summarizer/src/dashboard-generator.js` | - | - | o |
 | `static/` | o | o | o |

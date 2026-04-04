@@ -225,7 +225,7 @@ s3://ai-papers-digest-pages-{account_id}/
 | メモリ | 128 MB |
 | タイムアウト | 120 秒（2分） |
 | トリガー | EventBridge ルール（ECS Task State Change: STOPPED） |
-| 環境変数 | `SUMMARIES_TABLE`, `DELIVERY_LOG_TABLE`, `SLACK_WEBHOOK_SECRET_ARN`, `DETAIL_PAGE_BASE_URL` |
+| 環境変数 | `SUMMARIES_TABLE`, `DELIVERY_LOG_TABLE`, `SLACK_BOT_TOKEN_SECRET_ARN`, `SLACK_CHANNEL_ID`, `DETAIL_PAGE_BASE_URL` |
 | DLQ | SQS `ai-papers-digest-deliverer-dlq` |
 
 #### feedback-collector（フィードバック収集）【Phase 2】

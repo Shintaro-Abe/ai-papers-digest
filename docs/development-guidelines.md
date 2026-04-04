@@ -146,7 +146,7 @@ CSS 変数で統一:
 | 言語 | フレームワーク | カバレッジツール |
 |------|-------------|---------------|
 | Python | pytest | pytest-cov |
-| JavaScript | Jest | Jest built-in |
+| JavaScript | node:test（Node.js 組み込み） | - |
 
 ### テスト分類
 
@@ -157,7 +157,7 @@ CSS 変数で統一:
 
 ### ユニットテスト方針
 
-- **外部 API はモック化**: `unittest.mock` / Jest `jest.mock()` で外部依存を分離
+- **外部 API はモック化**: `unittest.mock`（Python）/ `node:test` mock（JS）で外部依存を分離
 - **DynamoDB はモック化**: `moto`（Python）で DynamoDB をローカルモック
 - **Claude CLI はモック化**: `execSync` をモックし、固定 JSON レスポンスを返す
 - **テストデータ**: `tests/fixtures/` に JSON/XML のサンプルレスポンスを配置
@@ -324,16 +324,15 @@ aws secretsmanager create-secret --name ai-papers-digest/claude-auth-token --sec
 # Python 仮想環境
 python3.12 -m venv .venv
 source .venv/bin/activate
-pip install -r src/lambdas/layer/requirements.txt
-pip install -r requirements-dev.txt  # pytest, mypy, ruff 等
+pip install -r requirements-dev.txt  # pytest, mypy, ruff, boto3 等
 
 # Node.js
 cd src/summarizer
 npm install
 
 # テスト実行
-pytest                      # Python ユニットテスト
-cd src/summarizer && npm test  # JS ユニットテスト
+pytest tests/unit/lambdas/ -v           # Python ユニットテスト（50件）
+node --test tests/unit/summarizer/      # JS ユニットテスト（66件）
 ```
 
 ### `requirements-dev.txt`（開発用依存）
@@ -345,6 +344,10 @@ moto[dynamodb]
 mypy
 ruff
 boto3-stubs[dynamodb,lambda,ecs,s3,secretsmanager]
+types-requests
+requests
+feedparser
+boto3
 ```
 
 ## 9. セキュリティスキャン規約
