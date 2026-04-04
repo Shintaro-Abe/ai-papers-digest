@@ -189,11 +189,17 @@ sequenceDiagram
 
 score = w1 × normalize(hf_upvotes)
       + w2 × normalize(citation_count)
-      + w3 × normalize(source_count)    # 1:arXivのみ, 2:arXiv+HF, 3:arXiv+HF+S2
-      + w4 × feedback_bonus             # Phase 2 で有効化、初期値=0
+      + w3 × normalize(source_count)
+      + w4 × normalize(feedback_bonus)
 
 初期ウェイト: w1=0.4, w2=0.2, w3=0.2, w4=0.2
 ```
+
+**feedback_bonus の計算:**
+1. 直近28日間のフィードバック（👍/👎）から各 arXiv カテゴリの Like 率を計算
+2. Laplace 平滑化: `preference(cat) = (likes + 1) / (total + 2)`
+3. 論文のカテゴリの平均 preference スコアを feedback_bonus とする
+4. feedback データがない場合は 0.0（既存動作と同じ）
 
 **フィルタリング条件:**
 1. 過去に配信済みの arXiv ID を除外（`delivery_log` テーブル参照）
@@ -358,14 +364,17 @@ score = w1 × normalize(hf_upvotes)
 
 **ウェイト調整ロジック:**
 ```
-各ウェイト要素の「予測力」を評価:
-  - hf_upvotes が高い論文が Like される率
-  - citation_count が高い論文が Like される率
-  - source_count が多い論文が Like される率
+1. 各特徴量の「予測力」をベイズ平滑化で評価:
+   - w1: hf_upvotes が高い論文が Like される傾向
+   - w2: citation_count が高い論文が Like される傾向
+   - w3: source_count が多い論文が Like される傾向
+   - w4: Like 論文のカテゴリ重複度（カテゴリ予測力）
 
-予測力が高い要素のウェイトを上げ、低い要素のウェイトを下げる
-ウェイトの合計は常に 1.0 に正規化
-最小ウェイト: 0.05（いずれの要素も完全には無視しない）
+2. 安全策:
+   - 最低フィードバック数: 5件未満はウェイト変更しない
+   - EMA ブレンド: 新ウェイト = 70% × 現ウェイト + 30% × 最適化ウェイト
+   - 最小ウェイト: 0.05（いずれの要素も完全には無視しない）
+   - 合計は常に 1.0 に正規化
 ```
 
 ## 4. データモデル定義
