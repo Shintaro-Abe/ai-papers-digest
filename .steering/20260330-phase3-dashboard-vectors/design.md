@@ -256,7 +256,11 @@ async function main() {
 }
 ```
 
-クライアントサイドで lunr.js がこの JSON をロードし、title_ja + compact_summary + tags を対象にインクリメンタル検索する。
+クライアントサイドで以下の2段階検索を実行する：
+1. **lunr.js**（英語・トークン化済みタグに有効）
+2. **部分文字列検索**（日本語テキストのフォールバック — lunr.js はスペース区切りトークナイズのため日本語フレーズに非対応）
+
+両方の結果をマージ（重複排除）して表示する。
 
 ## 5. テンプレート設計
 
@@ -295,28 +299,31 @@ async function main() {
 
 ### search.js
 
+2段階検索の仕組み:
+
 ```javascript
-let idx, papers;
-
-fetch('/search-index.json')
-  .then(r => r.json())
-  .then(data => {
-    papers = data.papers;
-    idx = lunr(function() {
-      this.ref('id');
-      this.field('title_ja', { boost: 2 });
-      this.field('compact_summary');
-      this.field('tags', { boost: 1.5 });
-      papers.forEach(p => this.add(p));
-    });
-  });
-
-document.getElementById('search-input').addEventListener('input', function(e) {
-  const query = e.target.value.trim();
-  if (query.length < 2) return;
-  const results = idx.search(query);
-  // 結果を表示...
+// 1. lunr.js インデックス構築（英語・タグ検索に有効）
+idx = lunr(function() {
+  this.ref('id');
+  this.field('title_ja', { boost: 2 });
+  this.field('title', { boost: 1.5 });
+  this.field('compact_summary');
+  this.field('tags', { boost: 1.5 });
+  papers.forEach(p => this.add(p));
 });
+
+// 2. 日本語部分文字列検索（フォールバック）
+function substringSearch(query) {
+  var q = query.toLowerCase();
+  return papers.filter(function(p) {
+    return p.title_ja.toLowerCase().indexOf(q) !== -1 ||
+      p.title.toLowerCase().indexOf(q) !== -1 ||
+      p.compact_summary.toLowerCase().indexOf(q) !== -1 ||
+      p.tags.toLowerCase().indexOf(q) !== -1;
+  });
+}
+
+// 3. マージ: lunr 結果 → 部分文字列結果（重複排除）
 ```
 
 ## 6. IAM 権限の追加
@@ -383,7 +390,7 @@ Fargate タスクの `entrypoint.sh` に以下の仕組みを実装済み：
 | Lambda の相対インポートが動作しない | Lambda 起動エラー | `from .` → 絶対インポートに修正（collector, scorer） | **解決済み** |
 | Deliverer が日付外の要約も配信 | 重複配信 | `created_at` ではなく `date` フィールドでフィルタするよう修正 | **解決済み** |
 | GitHub Actions の Docker build が amd64 | Fargate ARM64 で exec format error | deploy.yml から Docker build を削除し CodeBuild（ARM_CONTAINER）でビルド | **解決済み** |
-| lunr.js が日本語トークナイズに非対応 | 日本語検索の精度が低い | TinySegmenter を lunr.js のトークナイザーとして追加 | 未着手 |
+| lunr.js が日本語トークナイズに非対応 | 日本語検索の精度が低い | 部分文字列検索をフォールバックとして追加。TinySegmenter は不要になった | **解決済み** |
 | search-index.json のサイズ増大（1年後 ~2,500件） | 初回ロード遅延 | 圧縮（gzip）+ 直近3ヶ月のみインデックス化、古い分は月別分割 | 未着手 |
 
 ## 10. CI/CD の変更

@@ -157,8 +157,8 @@ graph LR
 ```
 s3://ai-papers-digest-pages-{account_id}/
 ├── index.html                          # トップページ（最新ダイジェストへリダイレクト）
-├── search.html                         # 検索ページ（lunr.js クライアントサイド検索）
-├── search-index.json                   # lunr.js 用全文検索インデックス
+├── search.html                         # 検索ページ（lunr.js + 日本語部分文字列検索）
+├── search-index.json                   # 検索用インデックス（タイトル・要約・タグ）
 ├── assets/
 │   ├── style.css                       # 共通スタイルシート
 │   └── search.js                       # 検索ロジック（lunr.js）

@@ -76,7 +76,8 @@
 ## Step 5: クライアントサイド検索 ✅ 完了
 
 - [x] 5.1 `static/search.js` 実装
-  - lunr.js で search-index.json をロード
+  - lunr.js で search-index.json をロード（英語・タグ検索用）
+  - 日本語部分文字列検索のフォールバック追加（title_ja, compact_summary, tags 対象）
   - デバウンス付きインクリメンタル検索 + ワイルドカード対応
   - 最大30件の結果表示
 - [x] 5.2 dashboard-generator.js に search-index.json 生成を追加
