@@ -19,10 +19,9 @@ Phase 1 で構築した S3 静的詳細ページを拡張し、Phase 2 のフィ
 
 ### 対象インフラ（新規追加分）
 
-- S3 Vectors（vector bucket + vector index）
-- Lambda × 1（search API）
-- API Gateway に検索ルート追加
-- Bedrock Titan Embeddings（埋め込みモデル）または Semantic Scholar SPECTER2
+- S3 Vectors（vector bucket + vector index、dimension=1024, cosine）
+- Bedrock Titan Embeddings V2（`amazon.titan-embed-text-v2:0`、1024次元）
+- ※ Lambda + API Gateway による検索 API は不要（クライアントサイド検索で実現）
 
 ### スコープ外
 
@@ -78,7 +77,8 @@ Phase 1 で構築した S3 静的詳細ページを拡張し、Phase 2 のフィ
 - 検索は **クライアントサイド JavaScript**（lunr.js 等）+ 静的 JSON インデックス
 - セマンティック検索の類似論文は **バッチ処理で事前計算** し静的 HTML に埋め込む（リアルタイム API 不要）
 - S3 Vectors は **ゼロスケール** で月額 < $0.05
-- 埋め込みモデル: Bedrock Titan Embeddings V2（768次元）を優先。コスト: ~$0.00002/1K tokens
+- 埋め込みモデル: Bedrock Titan Embeddings V2（1024次元）。コスト: ~$0.00002/1K tokens
+  - ※ Titan V2 は 256, 512, 1024 のみ対応（768 は非対応）
 
 ## 6. 前提条件
 

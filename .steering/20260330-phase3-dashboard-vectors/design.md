@@ -77,11 +77,12 @@ graph TB
 
 ### 3.1 embedding-client.js（新規）
 
-**責務:** 論文のテキストから768次元のベクトル埋め込みを生成する
+**責務:** 論文のテキストから1024次元のベクトル埋め込みを生成する
 
 ```javascript
 // Bedrock Titan Embeddings V2 を使用
 const { BedrockRuntimeClient, InvokeModelCommand } = require('@aws-sdk/client-bedrock-runtime');
+const DIMENSION = 1024; // Titan V2 は 256, 512, 1024 のみ対応（768 は非対応）
 
 async function generateEmbedding(text) {
   const client = new BedrockRuntimeClient({ region: 'ap-northeast-1' });
@@ -90,12 +91,12 @@ async function generateEmbedding(text) {
     contentType: 'application/json',
     body: JSON.stringify({
       inputText: text,
-      dimensions: 768,
+      dimensions: DIMENSION,
       normalize: true,
     }),
   }));
   const result = JSON.parse(new TextDecoder().decode(response.body));
-  return result.embedding; // float32[768]
+  return result.embedding; // float32[1024]
 }
 ```
 
@@ -114,7 +115,7 @@ const { S3VectorsClient, PutVectorsCommand, QueryVectorsCommand } = require('@aw
 async function putVector(arxivId, embedding, metadata) {
   await client.send(new PutVectorsCommand({
     vectorBucketName: VECTOR_BUCKET,
-    vectorIndexName: VECTOR_INDEX,
+    indexName: VECTOR_INDEX,
     vectors: [{
       key: arxivId,
       data: { float32: embedding },
@@ -132,7 +133,7 @@ async function putVector(arxivId, embedding, metadata) {
 async function querySimilar(embedding, topK = 5, excludeKey = null) {
   const response = await client.send(new QueryVectorsCommand({
     vectorBucketName: VECTOR_BUCKET,
-    vectorIndexName: VECTOR_INDEX,
+    indexName: VECTOR_INDEX,
     queryVector: { float32: embedding },
     topK: topK + 1, // 自分自身を除外するため+1
   }));
@@ -144,7 +145,7 @@ async function querySimilar(embedding, topK = 5, excludeKey = null) {
 
 **S3 Vectors 構成:**
 - Vector bucket: `ai-papers-digest-vectors`
-- Vector index: `paper-embeddings`（dimension=768, metric=cosine）
+- Vector index: `paper-embeddings`（dimension=1024, metric=cosine）
 
 ### 3.3 dashboard-generator.js（新規）
 
@@ -231,7 +232,7 @@ async function main() {
 |------|-----|
 | Vector bucket | `ai-papers-digest-vectors` |
 | Vector index | `paper-embeddings` |
-| Dimension | 768 |
+| Dimension | 1024 |
 | Distance metric | cosine |
 | Vector key | arxiv_id |
 | Metadata | title(S), compact_summary(S), tags(S), date(S) |
@@ -323,14 +324,24 @@ document.getElementById('search-input').addEventListener('input', function(e) {
 Fargate タスクロールに以下を追加：
 
 ```
-s3vectors:CreateVectorBucket
-s3vectors:CreateVectorIndex
 s3vectors:PutVectors
 s3vectors:GetVectors
 s3vectors:QueryVectors
-s3vectors:ListVectorIndexes
+s3vectors:DeleteVectors
+s3vectors:ListVectors
 bedrock:InvokeModel  (amazon.titan-embed-text-v2:0)
+secretsmanager:PutSecretValue  (Claude OAuth トークンのリフレッシュ後書き戻し)
 ```
+
+### Claude OAuth トークンの自動リフレッシュ
+
+Fargate タスクの `entrypoint.sh` に以下の仕組みを実装済み：
+
+1. 起動時: Secrets Manager → `~/.claude/.credentials.json` に展開
+2. Claude CLI 実行: `accessToken` 期限切れ時は `refreshToken` で自動リフレッシュ
+3. 終了時: トークンに変更があれば Secrets Manager に書き戻し（`@aws-sdk/client-secrets-manager` 使用）
+
+これにより `refreshToken` が有効な限り、手動でのトークン更新は不要。
 
 ## 7. コスト見積もり（Phase 3 追加分）
 
@@ -361,9 +372,34 @@ bedrock:InvokeModel  (amazon.titan-embed-text-v2:0)
 
 ## 9. リスク
 
-| リスク | 影響 | 軽減策 |
-|--------|------|--------|
-| S3 Vectors SDK が Node.js で未提供 | vectors-client.js が実装不可 | boto3（Python Lambda）にフォールバック、または AWS SDK v3 の最新版を確認 |
-| Bedrock Titan Embeddings が ap-northeast-1 で未提供 | 埋め込み生成不可 | Semantic Scholar SPECTER2 embedding を代替使用 |
-| lunr.js が日本語トークナイズに非対応 | 日本語検索の精度が低い | TinySegmenter を lunr.js のトークナイザーとして追加 |
-| search-index.json のサイズ増大（1年後 ~2,500件） | 初回ロード遅延 | 圧縮（gzip）+ 直近3ヶ月のみインデックス化、古い分は月別分割 |
+| リスク | 影響 | 軽減策 | 状態 |
+|--------|------|--------|------|
+| S3 Vectors SDK が Node.js で未提供 | vectors-client.js が実装不可 | `@aws-sdk/client-s3vectors` が利用可能であることを確認済み | **解決済み** |
+| Bedrock Titan Embeddings が ap-northeast-1 で未提供 | 埋め込み生成不可 | ap-northeast-1 で `amazon.titan-embed-text-v2:0` が利用可能であることを確認済み | **解決済み** |
+| Titan V2 の次元数に 768 が非対応 | 埋め込み生成エラー | 1024次元に変更（Titan V2 は 256, 512, 1024 のみ対応） | **解決済み** |
+| S3 Vectors API のパラメータ名相違 | ベクトル保存エラー | `vectorIndexName` → `indexName` に修正 | **解決済み** |
+| Claude OAuth トークン期限切れ | Fargate タスク失敗 | entrypoint.sh でリフレッシュ後トークンを Secrets Manager に書き戻し | **解決済み** |
+| Lambda に依存パッケージが未デプロイ | Lambda 実行エラー | deploy.yml に Lambda パッケージング + デプロイステップを追加 | **解決済み** |
+| Lambda の相対インポートが動作しない | Lambda 起動エラー | `from .` → 絶対インポートに修正（collector, scorer） | **解決済み** |
+| Deliverer が日付外の要約も配信 | 重複配信 | `created_at` ではなく `date` フィールドでフィルタするよう修正 | **解決済み** |
+| lunr.js が日本語トークナイズに非対応 | 日本語検索の精度が低い | TinySegmenter を lunr.js のトークナイザーとして追加 | 未着手 |
+| search-index.json のサイズ増大（1年後 ~2,500件） | 初回ロード遅延 | 圧縮（gzip）+ 直近3ヶ月のみインデックス化、古い分は月別分割 | 未着手 |
+
+## 10. CI/CD の変更
+
+### deploy.yml の構成変更
+
+`terraform apply` を deploy.yml から削除し、アプリケーションコードのデプロイのみに限定：
+
+| ステップ | 内容 |
+|---------|------|
+| テスト | `pytest tests/unit/` |
+| Lambda デプロイ | 5関数の zip パッケージング + `aws lambda update-function-code` |
+| Docker ビルド | ECR push（`latest` タグ上書き） |
+| S3 同期 | `aws s3 sync static/` |
+
+**理由:** Terraform バックエンドが local のため、GitHub Actions と tfstate が競合する。インフラ変更はローカルで手動 `terraform apply` を実行する。
+
+### ECR タグ設定
+
+`image_tag_mutability` を `IMMUTABLE` → `MUTABLE` に変更。`latest` タグの上書き運用に対応。
