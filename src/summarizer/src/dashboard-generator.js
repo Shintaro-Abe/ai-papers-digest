@@ -185,4 +185,12 @@ async function generate(currentDate) {
   console.log(`[dashboard] Dashboard generation complete. Tags: ${tagMap.size}, Papers: ${allSummaries.length}`);
 }
 
-module.exports = { generate };
+module.exports = {
+  generate,
+  aggregateTags,
+  renderTagList,
+  renderTagPage,
+  renderSearchPage,
+  buildSearchIndex,
+  renderIndex,
+};
