@@ -1,32 +1,62 @@
 # AI Papers Digest
 
 AI 分野の最新論文を自動キュレーション・要約し、毎朝 Slack に配信するサーバーレスエージェント。
-<!-- Phase 3: S3 Vectors によるセマンティック検索を予定 -->
-<!-- CI/CD: GitHub OIDC 認証 -->
 
 ## 概要
 
 - arXiv / Hugging Face / Semantic Scholar から日次で論文を収集
-- 注目度スコアに基づき上位 5〜10 本を自動選出
+- 注目度スコアに基づき上位 7 本を自動選出
 - Claude LLM でコンパクト要約（200〜400文字）+ 詳細要約（構造化 4 セクション）を生成
 - Slack にコンパクト要約を配信し、詳細は S3 静的ページで閲覧
+- 👍/👎 フィードバックで論文選定精度を継続改善
+- 類似論文検索・タグ別閲覧・キーワード検索が可能な Web ダッシュボード
 
 ## アーキテクチャ
 
 ```
 EventBridge(日次) → collector Lambda → scorer Lambda → Fargate(Claude CLI) → deliverer Lambda → Slack
-                                                            ↓
-                                                     S3 + CloudFront（詳細ページ）
+                                                            │
+                                                            ├→ S3 + CloudFront（詳細ページ・ダッシュボード）
+                                                            ├→ Bedrock Titan V2（埋め込み生成）
+                                                            └→ S3 Vectors（類似論文検索）
+
+EventBridge(週次) → weight-adjuster Lambda（フィードバック学習）
+Slack Events API → API Gateway → feedback Lambda（👍/👎 収集）
 ```
 
 | コンポーネント | 技術 |
 |--------------|------|
-| データ収集・スコアリング・配信 | AWS Lambda（Python 3.12） |
-| 要約生成 | ECS Fargate（Node.js 22 + Claude CLI） |
-| データストア | DynamoDB |
-| 詳細ページ | S3 + CloudFront |
-| IaC | Terraform |
-| CI/CD | GitHub Actions |
+| データ収集・スコアリング・配信 | AWS Lambda（Python 3.12, arm64） |
+| 要約生成 | ECS Fargate（Node.js 22 + Claude CLI, SPOT） |
+| データストア | DynamoDB（6 テーブル） |
+| 詳細ページ・ダッシュボード | S3 + CloudFront |
+| ベクトル検索 | S3 Vectors + Bedrock Titan Embeddings V2 |
+| IaC | Terraform（AWS provider ~> 6.0） |
+| CI/CD | GitHub Actions + CodeBuild（ARM64） |
+| 認証 | GitHub OIDC（CI/CD）、Claude OAuth（自動リフレッシュ） |
+
+## 主要機能
+
+### Phase 1: 論文収集・要約・配信
+
+- 3 ソース（arXiv API, HuggingFace Papers, Semantic Scholar）からの並列収集
+- スコアリング: `w1×hf_upvotes + w2×citations + w3×source_count + w4×feedback_bonus`
+- Claude Max プラン（`claude -p` CLI）による 2 層要約生成
+- Slack Bot Token + `chat.postMessage` で日次配信
+
+### Phase 2: フィードバック学習
+
+- Slack リアクション（👍/👎）によるフィードバック収集
+- カテゴリベースの feedback_bonus（Laplace 平滑化）
+- 週次ウェイト最適化（ベイズ平滑化 + EMA ブレンド）
+- 安全策: 最低 5 件のフィードバックがないとウェイト変更しない
+
+### Phase 3: Web ダッシュボード + セマンティック検索
+
+- Bedrock Titan Embeddings V2（1024 次元）による論文埋め込み
+- S3 Vectors でコサイン類似度検索 → 詳細ページに類似論文セクション
+- タグ一覧・タグ別論文一覧ページ
+- クライアントサイド検索（lunr.js + 日本語部分文字列検索フォールバック）
 
 ## ディレクトリ構成
 
@@ -36,19 +66,20 @@ src/
 │   ├── collector/     #   論文収集
 │   ├── scorer/        #   スコアリング・フィルタリング
 │   ├── deliverer/     #   Slack 配信
-│   └── layer/         #   共通依存パッケージ
+│   ├── feedback/      #   フィードバック収集（Phase 2）
+│   └── weight_adjuster/ # ウェイト最適化（Phase 2）
 ├── summarizer/        # Fargate コンテナ（Node.js）
-│   ├── src/           #   要約生成 + HTML 生成
-│   └── templates/     #   詳細ページテンプレート
+│   ├── src/           #   要約・埋め込み・ダッシュボード生成
+│   └── templates/     #   HTML テンプレート（5 種）
 └── shared/            # 共有定数
 
 terraform/
-├── modules/           # 再利用可能モジュール
-└── environments/prod/ # 本番環境構成
+├── modules/           # 再利用可能モジュール（10 モジュール）
+└── environments/prod/ # 本番環境構成（local バックエンド）
 
-docs/                  # 設計ドキュメント
-tests/                 # ユニット・統合テスト
-static/                # S3 静的アセット（CSS）
+docs/                  # 設計ドキュメント（7 ファイル）
+tests/                 # テスト（Python 67 件 + Node.js 66 件 = 133 件）
+static/                # S3 静的アセット（CSS, search.js）
 ```
 
 ## セットアップ
@@ -57,45 +88,37 @@ static/                # S3 静的アセット（CSS）
 
 - AWS アカウント + AWS CLI 設定済み
 - Claude Max プラン加入済み
-- Python 3.12, Node.js 22, Terraform >= 1.9, Docker
+- Python 3.12, Node.js 22, Terraform >= 1.9
 
 ### 1. シークレットの準備
 
 [docs/secrets-setup.md](docs/secrets-setup.md) を参照し、以下を入手:
-- Slack Incoming Webhook URL
+- Slack Bot Token + Signing Secret
 - Semantic Scholar API Key
-- Claude Max 認証トークン
+- Claude Max 認証トークン（`~/.claude/.credentials.json`）
 
 ### 2. インフラデプロイ
 
 ```bash
-# Terraform 初期化・適用
 cd terraform/environments/prod
 cp terraform.tfvars.example terraform.tfvars  # 変数を編集
 terraform init
 terraform apply
-
-# シークレット値を登録
-aws secretsmanager put-secret-value --secret-id ai-papers-digest/slack-webhook-url --secret-string "..."
-aws secretsmanager put-secret-value --secret-id ai-papers-digest/semantic-scholar-api-key --secret-string "..."
-aws secretsmanager put-secret-value --secret-id ai-papers-digest/claude-auth-token --secret-string "..."
 ```
 
-### 3. Docker イメージのビルド・プッシュ
+### 3. Docker イメージのビルド
 
 ```bash
-ECR_URI=$(cd terraform/environments/prod && terraform output -raw ecr_repository_url)
-docker build -t summarizer src/summarizer/
-docker tag summarizer $ECR_URI:$(git rev-parse --short HEAD)
-docker push $ECR_URI:$(git rev-parse --short HEAD)
+# CodeBuild（ARM64）でビルド
+aws codebuild start-build --project-name ai-papers-digest-build
 ```
 
-### 4. 静的アセットのデプロイ
+### 4. Lambda デプロイ + 静的アセット
 
-```bash
-BUCKET=$(cd terraform/environments/prod && terraform output -raw pages_bucket_name)
-aws s3 sync static/ s3://$BUCKET/assets/
-```
+main ブランチへの push で自動実行（GitHub Actions）:
+- Lambda 関数パッケージング + デプロイ
+- CodeBuild トリガー（ARM64 Docker ビルド + ECR push）
+- S3 静的アセット同期
 
 ### 5. 動作確認
 
@@ -112,16 +135,11 @@ python3.12 -m venv .venv && source .venv/bin/activate
 pip install -r requirements-dev.txt
 
 # テスト実行
-PYTHONPATH=. pytest tests/unit/ -v -o addopts=""    # Python
-node --test tests/unit/summarizer/                   # Node.js
+pytest tests/unit/lambdas/ -v -o addopts=""     # Python（67 件）
+node --test tests/unit/summarizer/               # Node.js（66 件）
 
 # Lint
 ruff check src/ && ruff format --check src/
-
-# シークレットスキャン（pre-commit hook 設定）
-git config core.hooksPath .githooks
-# 手動スキャン
-gitleaks detect --config .gitleaks.toml --verbose
 
 # Terraform
 cd terraform/environments/prod && terraform plan
