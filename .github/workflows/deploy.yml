@@ -43,7 +43,12 @@ jobs:
 
       - name: Terraform Apply
         working-directory: terraform/environments/prod
-        run: terraform apply -auto-approve
+        run: |
+          terraform apply -auto-approve \
+            -var="alert_email=deploy@example.com" \
+            -var="pages_bucket_name=ai-papers-digest-pages-${{ secrets.AWS_ACCOUNT_ID }}" \
+            -var="github_repository_url=https://github.com/${{ github.repository }}.git" \
+            -input=false
 
       - name: Package and deploy Lambda functions
         run: |
