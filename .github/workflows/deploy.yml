@@ -57,16 +57,23 @@ jobs:
               --query 'FunctionName' --output text
           done
 
-      - name: Login to ECR
-        uses: aws-actions/amazon-ecr-login@v2
-
-      - name: Build and push Docker image
-        env:
-          ECR_REPOSITORY: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.ap-northeast-1.amazonaws.com/ai-papers-digest-summarizer
+      - name: Build Docker image via CodeBuild (ARM64)
         run: |
-          docker build -t summarizer src/summarizer/
-          docker tag summarizer $ECR_REPOSITORY:latest
-          docker push $ECR_REPOSITORY:latest
+          BUILD_ID=$(aws codebuild start-build \
+            --project-name ai-papers-digest-build \
+            --query 'build.id' --output text)
+          echo "CodeBuild started: $BUILD_ID"
+          while true; do
+            STATUS=$(aws codebuild batch-get-builds --ids "$BUILD_ID" \
+              --query 'builds[0].buildStatus' --output text)
+            echo "Status: $STATUS"
+            if [ "$STATUS" = "SUCCEEDED" ]; then break; fi
+            if [ "$STATUS" = "FAILED" ] || [ "$STATUS" = "FAULT" ] || [ "$STATUS" = "STOPPED" ] || [ "$STATUS" = "TIMED_OUT" ]; then
+              echo "CodeBuild failed with status: $STATUS"
+              exit 1
+            fi
+            sleep 15
+          done
 
       - name: Sync static assets to S3
         run: |

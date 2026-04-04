@@ -504,6 +504,15 @@ module "github_oidc" {
         ]
         Resource = "arn:aws:lambda:ap-northeast-1:${data.aws_caller_identity.current.account_id}:function:ai-papers-digest-*"
       },
+      {
+        Sid    = "CodeBuildTrigger"
+        Effect = "Allow"
+        Action = [
+          "codebuild:StartBuild",
+          "codebuild:BatchGetBuilds",
+        ]
+        Resource = "arn:aws:codebuild:ap-northeast-1:${data.aws_caller_identity.current.account_id}:project/ai-papers-digest-*"
+      },
     ]
   })
 
