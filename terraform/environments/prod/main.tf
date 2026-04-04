@@ -496,6 +496,14 @@ module "github_oidc" {
         Action = ["cloudfront:CreateInvalidation"]
         Resource = "*"
       },
+      {
+        Sid    = "LambdaDeploy"
+        Effect = "Allow"
+        Action = [
+          "lambda:UpdateFunctionCode",
+        ]
+        Resource = "arn:aws:lambda:ap-northeast-1:${data.aws_caller_identity.current.account_id}:function:ai-papers-digest-*"
+      },
     ]
   })
 

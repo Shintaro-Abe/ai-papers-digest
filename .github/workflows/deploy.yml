@@ -45,6 +45,29 @@ jobs:
         working-directory: terraform/environments/prod
         run: terraform apply -auto-approve
 
+      - name: Package and deploy Lambda functions
+        run: |
+          LAMBDAS=("collector" "scorer" "deliverer" "feedback" "weight_adjuster")
+          for name in "${LAMBDAS[@]}"; do
+            echo "--- Packaging $name ---"
+            SRC_DIR="src/lambdas/$name"
+            BUILD_DIR="/tmp/lambda-build/$name"
+            ZIP_PATH="/tmp/lambda-zips/$name.zip"
+            mkdir -p "$BUILD_DIR"
+            # Install dependencies if requirements.txt has content
+            if grep -q '[a-zA-Z]' "$SRC_DIR/requirements.txt" 2>/dev/null; then
+              pip install -r "$SRC_DIR/requirements.txt" -t "$BUILD_DIR" -q
+            fi
+            cp "$SRC_DIR"/*.py "$BUILD_DIR"/
+            cd "$BUILD_DIR" && zip -r "$ZIP_PATH" . -q && cd -
+            echo "--- Deploying $name ---"
+            FUNC_NAME="ai-papers-digest-${name//_/-}"
+            aws lambda update-function-code \
+              --function-name "$FUNC_NAME" \
+              --zip-file "fileb://$ZIP_PATH" \
+              --query 'FunctionName' --output text
+          done
+
       - name: Login to ECR
         uses: aws-actions/amazon-ecr-login@v2
 
