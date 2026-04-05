@@ -64,9 +64,19 @@ function callClaude(prompt) {
       stdio: ["pipe", "pipe", "pipe"],
     });
   } catch (err) {
-    const stderr = err.stderr ? err.stderr.toString() : "no stderr";
-    const stdout = err.stdout ? err.stdout.toString().slice(0, 500) : "no stdout";
-    throw new Error(`Claude CLI failed. stderr: ${stderr} | stdout: ${stdout}`);
+    const stderr = err.stderr ? err.stderr.toString().slice(0, 200) : "no stderr";
+    const stdout = err.stdout ? err.stdout.toString() : "";
+    // Extract only safe fields from Claude CLI JSON output (avoid leaking tokens/session data)
+    let safeMessage = "no details";
+    try {
+      const parsed = JSON.parse(stdout);
+      if (parsed.is_error) {
+        safeMessage = (parsed.result || "").slice(0, 200);
+      }
+    } catch {
+      safeMessage = stdout.slice(0, 100);
+    }
+    throw new Error(`Claude CLI failed. stderr: ${stderr} | detail: ${safeMessage}`);
   }
 
   const parsed = JSON.parse(result);
