@@ -241,7 +241,7 @@ module "eventbridge" {
   deliverer_lambda_arn  = module.lambda_deliverer.function_arn
   deliverer_lambda_name = module.lambda_deliverer.function_name
   ecs_cluster_arn       = module.ecs.cluster_arn
-  schedule_enabled      = false # 初回は無効。動作確認後に true に変更
+  schedule_enabled      = true
   tags                  = var.tags
 }
 
