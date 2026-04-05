@@ -231,6 +231,33 @@ module "lambda_deliverer" {
   tags = var.tags
 }
 
+# --- Lambda: token_refresher ---
+
+module "lambda_token_refresher" {
+  source = "../../modules/lambda"
+
+  function_name    = "ai-papers-digest-token-refresher"
+  timeout          = 30
+  memory_size      = 128
+  filename         = data.archive_file.lambda_placeholder.output_path
+  source_code_hash = data.archive_file.lambda_placeholder.output_base64sha256
+
+  environment_variables = {
+    CLAUDE_SECRET_ID = aws_secretsmanager_secret.claude_auth_token.arn
+    LOG_LEVEL        = "INFO"
+  }
+
+  policy_statements = [
+    {
+      effect  = "Allow"
+      actions = ["secretsmanager:GetSecretValue", "secretsmanager:PutSecretValue"]
+      resources = [aws_secretsmanager_secret.claude_auth_token.arn]
+    },
+  ]
+
+  tags = var.tags
+}
+
 # --- EventBridge ---
 
 module "eventbridge" {
@@ -240,9 +267,11 @@ module "eventbridge" {
   collector_lambda_name = module.lambda_collector.function_name
   deliverer_lambda_arn  = module.lambda_deliverer.function_arn
   deliverer_lambda_name = module.lambda_deliverer.function_name
-  ecs_cluster_arn       = module.ecs.cluster_arn
-  schedule_enabled      = true
-  tags                  = var.tags
+  ecs_cluster_arn              = module.ecs.cluster_arn
+  token_refresher_lambda_arn   = module.lambda_token_refresher.function_arn
+  token_refresher_lambda_name  = module.lambda_token_refresher.function_name
+  schedule_enabled             = true
+  tags                         = var.tags
 }
 
 # --- Monitoring ---

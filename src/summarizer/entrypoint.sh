@@ -2,7 +2,6 @@
 set -e
 
 # CLAUDE_ACCESS_TOKEN 環境変数から ~/.claude/.credentials.json を動的生成
-# CLAUDE_ACCESS_TOKEN には credentials.json の全体 JSON が格納されている想定
 if [ -n "$CLAUDE_ACCESS_TOKEN" ]; then
   mkdir -p ~/.claude
   echo "$CLAUDE_ACCESS_TOKEN" > ~/.claude/.credentials.json
@@ -11,12 +10,12 @@ else
   echo "[entrypoint] WARNING: CLAUDE_ACCESS_TOKEN not set"
 fi
 
-# メインアプリケーション起動
-node src/summarizer.js
-EXIT_CODE=$?
+# トークンリフレッシュを事前に実行（要約生成前にリフレッシュを確保）
+# claude auth status を実行すると、期限切れ時に自動リフレッシュが走る
+echo "[entrypoint] Checking auth status (triggers refresh if needed)..."
+claude auth status --output json 2>/dev/null || echo "[entrypoint] WARNING: auth status check failed"
 
-# Claude CLI がトークンを自動リフレッシュした場合、Secrets Manager に書き戻す
-# これにより次回の Fargate 起動時に最新のトークンが使える
+# リフレッシュ後のトークンを Secrets Manager に書き戻し（要約前に実施）
 if [ -n "$CLAUDE_SECRET_ID" ] && [ -f ~/.claude/.credentials.json ]; then
   node -e "
     const fs = require('fs');
@@ -24,7 +23,7 @@ if [ -n "$CLAUDE_SECRET_ID" ] && [ -f ~/.claude/.credentials.json ]; then
     (async () => {
       const updated = fs.readFileSync(process.env.HOME + '/.claude/.credentials.json', 'utf8');
       if (updated === process.env.CLAUDE_ACCESS_TOKEN) {
-        console.log('[entrypoint] Token unchanged, no sync needed');
+        console.log('[entrypoint] Token unchanged after auth check');
         return;
       }
       console.log('[entrypoint] Token was refreshed, syncing to Secrets Manager...');
@@ -33,8 +32,34 @@ if [ -n "$CLAUDE_SECRET_ID" ] && [ -f ~/.claude/.credentials.json ]; then
         SecretId: process.env.CLAUDE_SECRET_ID,
         SecretString: updated,
       }));
-      console.log('[entrypoint] Secrets Manager updated');
-    })().catch(e => console.error('[entrypoint] WARNING: Failed to update Secrets Manager:', e.message));
+      console.log('[entrypoint] Secrets Manager updated (pre-run)');
+    })().catch(e => console.error('[entrypoint] WARNING: Failed to sync:', e.message));
+  "
+fi
+
+# メインアプリケーション起動
+node src/summarizer.js
+EXIT_CODE=$?
+
+# 実行後にも再度書き戻し（summarizer 実行中にリフレッシュされた場合）
+if [ -n "$CLAUDE_SECRET_ID" ] && [ -f ~/.claude/.credentials.json ]; then
+  node -e "
+    const fs = require('fs');
+    const { SecretsManagerClient, PutSecretValueCommand } = require('@aws-sdk/client-secrets-manager');
+    (async () => {
+      const updated = fs.readFileSync(process.env.HOME + '/.claude/.credentials.json', 'utf8');
+      if (updated === process.env.CLAUDE_ACCESS_TOKEN) {
+        console.log('[entrypoint] Token unchanged after run');
+        return;
+      }
+      console.log('[entrypoint] Token refreshed during run, syncing to Secrets Manager...');
+      const client = new SecretsManagerClient({ region: process.env.AWS_REGION || 'ap-northeast-1' });
+      await client.send(new PutSecretValueCommand({
+        SecretId: process.env.CLAUDE_SECRET_ID,
+        SecretString: updated,
+      }));
+      console.log('[entrypoint] Secrets Manager updated (post-run)');
+    })().catch(e => console.error('[entrypoint] WARNING: Failed to sync:', e.message));
   "
 fi
 

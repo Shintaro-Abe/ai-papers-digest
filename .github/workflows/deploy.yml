@@ -36,7 +36,7 @@ jobs:
       - name: Package and deploy Lambda functions
         run: |
           mkdir -p /tmp/lambda-zips
-          LAMBDAS=("collector" "scorer" "deliverer" "feedback" "weight_adjuster")
+          LAMBDAS=("collector" "scorer" "deliverer" "feedback" "weight_adjuster" "token_refresher")
           for name in "${LAMBDAS[@]}"; do
             echo "--- Packaging $name ---"
             SRC_DIR="src/lambdas/$name"

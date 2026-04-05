@@ -33,6 +33,18 @@ variable "schedule_enabled" {
   default     = false
 }
 
+variable "token_refresher_lambda_arn" {
+  description = "ARN of the token refresher Lambda function"
+  type        = string
+  default     = ""
+}
+
+variable "token_refresher_lambda_name" {
+  description = "Name of the token refresher Lambda function"
+  type        = string
+  default     = ""
+}
+
 variable "tags" {
   description = "Tags to apply to all resources"
   type        = map(string)

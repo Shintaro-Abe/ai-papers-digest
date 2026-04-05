@@ -61,3 +61,28 @@ resource "aws_lambda_permission" "allow_eventbridge_deliverer" {
   principal     = "events.amazonaws.com"
   source_arn    = aws_cloudwatch_event_rule.task_complete.arn
 }
+
+# -----------------------------------------------------------------------------
+# Token Refresh Schedule (every hour)
+# -----------------------------------------------------------------------------
+resource "aws_cloudwatch_event_rule" "token_refresh" {
+  name                = "ai-papers-digest-token-refresh"
+  description         = "Refreshes Claude OAuth token every hour"
+  schedule_expression = "rate(1 hour)"
+  state               = var.schedule_enabled ? "ENABLED" : "DISABLED"
+
+  tags = var.tags
+}
+
+resource "aws_cloudwatch_event_target" "token_refresher" {
+  rule = aws_cloudwatch_event_rule.token_refresh.name
+  arn  = var.token_refresher_lambda_arn
+}
+
+resource "aws_lambda_permission" "allow_eventbridge_token_refresher" {
+  statement_id  = "AllowEventBridgeInvokeTokenRefresher"
+  action        = "lambda:InvokeFunction"
+  function_name = var.token_refresher_lambda_name
+  principal     = "events.amazonaws.com"
+  source_arn    = aws_cloudwatch_event_rule.token_refresh.arn
+}
