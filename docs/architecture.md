@@ -198,6 +198,7 @@ s3://ai-papers-digest-pages-{account_id}/
 | タイムアウト | 300 秒（5分） |
 | トリガー | EventBridge スケジュール（JST 6:00） |
 | 環境変数 | `PAPERS_TABLE`, `SCORER_FUNCTION_NAME`, `S2_API_KEY_SECRET_ARN`, `TARGET_CATEGORIES` |
+| 日付処理 | 内部管理日付はJST、HF APIクエリはUTC（2日分取得+dedup）。明示的date指定でバックフィル対応 |
 | DLQ | SQS `ai-papers-digest-collector-dlq` |
 | 同時実行数 | 1（日次バッチなので並行不要） |
 

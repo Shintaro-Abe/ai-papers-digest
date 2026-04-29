@@ -34,11 +34,11 @@ ai-papers-digest/
 src/
 ├── lambdas/                           # Lambda 関数群
 │   ├── collector/                     # 論文収集 Lambda
-│   │   ├── handler.py                 #   エントリポイント
+│   │   ├── handler.py                 #   エントリポイント（JST/UTC日付分離、バックフィル対応）
 │   │   ├── arxiv_client.py            #   arXiv API クライアント
 │   │   ├── hf_client.py               #   Hugging Face API クライアント
 │   │   ├── s2_client.py               #   Semantic Scholar API クライアント
-│   │   ├── paper_merger.py            #   論文統合・重複排除
+│   │   ├── paper_merger.py            #   論文統合・重複排除（HF日付間+HF/arXiv間）
 │   │   └── requirements.txt           #   依存パッケージ
 │   │
 │   ├── scorer/                        # スコアリング Lambda

@@ -111,8 +111,8 @@ sequenceDiagram
     EB->>L1: 日次トリガー(JST 6:00)
 
     par 並列データ収集
-        L1->>HF: GET /api/daily_papers
-        HF-->>L1: 論文リスト+upvotes
+        L1->>HF: GET /api/daily_papers (UTC当日+前日の2日分)
+        HF-->>L1: 論文リスト+upvotes (dedup済み)
     and
         L1->>AR: GET /api/query (cat:cs.AI等)
         AR-->>L1: 論文メタデータ(XML)
@@ -156,7 +156,9 @@ sequenceDiagram
 **入力:** EventBridge スケジュールイベント
 
 **処理フロー:**
-1. Hugging Face Daily Papers API を呼び出し（当日分）
+1. Hugging Face Daily Papers API を呼び出し（UTC当日 + UTC前日の2日分、arXiv IDで重複排除）
+   - HF APIはUTC基準のため、JST日付ではなくUTC日付でクエリする
+   - 明示的な日付指定（バックフィル）時は、指定日から逆算してUTC日付を導出
 2. arXiv Search API を呼び出し（前日〜当日の新着、対象カテゴリ）
 3. 取得した論文を arXiv ID ベースで統合・重複排除
 4. Semantic Scholar Batch API で引用数・TLDR を補完
@@ -167,7 +169,7 @@ sequenceDiagram
 
 | API | エンドポイント | パラメータ | レート制限対策 |
 |-----|---------------|-----------|---------------|
-| HF Daily Papers | `GET /api/daily_papers?date={today}` | date=YYYY-MM-DD | 単発リクエスト |
+| HF Daily Papers | `GET /api/daily_papers?date={UTC日付}` | date=YYYY-MM-DD（UTC当日+前日の2回） | 日付間の重複排除あり |
 | arXiv Search | `GET /api/query?search_query=cat:{category}&sortBy=submittedDate&sortOrder=descending&max_results=50` | カテゴリごとに実行 | 3秒間隔で順次実行 |
 | S2 Batch | `POST /paper/batch` | body: {"ids": ["ArXiv:{id}", ...]} | 1 RPS |
 

@@ -62,8 +62,8 @@ def _save_papers(table_name: str, papers: list[dict[str, Any]]) -> int:
 
 def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     """Collect papers from all sources and invoke scorer."""
-    date = event.get("date", _today_jst())
-    logger.info("Starting paper collection for date=%s", date)
+    collection_date = event.get("date", _today_jst())
+    logger.info("Starting paper collection for collection_date=%s", collection_date)
 
     papers_table = os.environ["PAPERS_TABLE"]
     scorer_function = os.environ["SCORER_FUNCTION_NAME"]
@@ -71,17 +71,37 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     categories_str = os.environ.get("TARGET_CATEGORIES", "cs.AI,cs.CL,cs.CV,cs.LG,stat.ML")
     categories = [c.strip() for c in categories_str.split(",")]
 
-    # 1. Fetch from Hugging Face
-    hf_papers = hf_client.fetch_daily_papers(date)
+    # 1. Fetch from Hugging Face (UTC dates — HF API is UTC-based)
+    # When an explicit date is provided (backfill/retry), derive HF dates
+    # from it; otherwise use the current UTC clock.
+    if "date" in event:
+        # Explicit date is JST; subtract 1 day to approximate UTC equivalent
+        base = datetime.strptime(collection_date, "%Y-%m-%d")
+        hf_date = (base - timedelta(days=1)).strftime("%Y-%m-%d")
+        hf_prev = (base - timedelta(days=2)).strftime("%Y-%m-%d")
+    else:
+        utc_now = datetime.now(UTC)
+        hf_date = utc_now.strftime("%Y-%m-%d")
+        hf_prev = (utc_now - timedelta(days=1)).strftime("%Y-%m-%d")
+
+    hf_today = hf_client.fetch_daily_papers(hf_date)
+    hf_prev_papers = hf_client.fetch_daily_papers(hf_prev)
+    seen_hf_ids = {p["arxiv_id"] for p in hf_today}
+    hf_papers = hf_today + [p for p in hf_prev_papers if p["arxiv_id"] not in seen_hf_ids]
+    hf_new = len(hf_papers) - len(hf_today)
+    logger.info(
+        "HF papers: %d (date=%s) + %d new (date=%s) = %d total",
+        len(hf_today), hf_date, hf_new, hf_prev, len(hf_papers),
+    )
 
     # 2. Fetch from arXiv
     arxiv_papers = arxiv_client.fetch_recent_papers(categories)
 
-    # 3. Merge and deduplicate
+    # 3. Merge and deduplicate (arxiv_id dedup handles HF overlap)
     merged = paper_merger.merge(hf_papers, arxiv_papers)
 
     if not merged:
-        logger.warning("No papers collected for date=%s", date)
+        logger.warning("No papers collected for collection_date=%s", collection_date)
         return {"statusCode": 200, "body": "No papers found"}
 
     # 4. Enrich with Semantic Scholar
@@ -94,19 +114,21 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     logger.info("Saved %d/%d papers to DynamoDB", saved_count, len(enriched))
 
     # 6. Invoke scorer asynchronously
-    payload = {"date": date}
+    payload = {"date": collection_date}
     lambda_client.invoke(
         FunctionName=scorer_function,
         InvocationType="Event",
         Payload=json.dumps(payload),
     )
-    logger.info("Invoked scorer for date=%s", date)
+    logger.info("Invoked scorer for date=%s", collection_date)
 
     return {
         "statusCode": 200,
         "body": json.dumps(
             {
-                "date": date,
+                "date": collection_date,
+                "hf_date": hf_date,
+                "hf_prev_date": hf_prev,
                 "hf_count": len(hf_papers),
                 "arxiv_count": len(arxiv_papers),
                 "merged_count": len(merged),

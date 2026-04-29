@@ -1,6 +1,9 @@
 """Tests for collector Lambda components."""
 
 import json
+import sys
+from datetime import UTC, datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
 
@@ -122,3 +125,127 @@ class TestPaperMerger:
         assert enriched[0]["s2_citation_count"] == 50
         assert enriched[0]["source_count"] == 2
         assert enriched[1]["s2_citation_count"] == 0  # Not in S2 data
+
+
+class TestCollectorHandlerHfDates:
+    """Tests for collector handler — HF date logic.
+
+    handler.py uses absolute imports (import arxiv_client) that only resolve
+    at Lambda runtime. We add the collector package to sys.path temporarily
+    so the handler can be imported in the test environment.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _import_handler(self) -> Any:
+        """Import handler with collector dir on sys.path, mocking boto3."""
+        import importlib
+        collector_dir = str(Path(__file__).resolve().parents[3] / "src" / "lambdas" / "collector")
+        sys.path.insert(0, collector_dir)
+        try:
+            with patch("boto3.resource"), patch("boto3.client"):
+                self.handler_mod = importlib.import_module("handler")
+                importlib.reload(self.handler_mod)
+            yield
+        finally:
+            sys.path.remove(collector_dir)
+
+    @patch("handler.lambda_client")
+    @patch("handler._save_papers", return_value=3)
+    @patch("handler.s2_client")
+    @patch("handler.arxiv_client")
+    @patch("handler.hf_client")
+    def test_hf_dates_are_utc_based(
+        self,
+        mock_hf: MagicMock,
+        mock_arxiv: MagicMock,
+        mock_s2: MagicMock,
+        mock_save: MagicMock,
+        mock_lambda: MagicMock,
+    ) -> None:
+        """HF API should be called with UTC dates, not JST."""
+        mock_hf.fetch_daily_papers.return_value = []
+        mock_arxiv.fetch_recent_papers.return_value = [
+            {"arxiv_id": "001", "title": "Test", "source": "arxiv"},
+        ]
+        mock_s2.fetch_batch.return_value = {}
+
+        # Simulate JST 06:00 = UTC 21:00 previous day
+        fake_utc = datetime(2026, 4, 28, 21, 0, 0, tzinfo=UTC)
+        with patch("handler.datetime") as mock_dt:
+            mock_dt.now.side_effect = lambda tz=None: fake_utc if tz == UTC else fake_utc.astimezone(timezone(timedelta(hours=9)))
+            mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+
+            self.handler_mod.handler({}, None)
+
+        # HF should be called with UTC dates (04-28 and 04-27), NOT JST (04-29)
+        hf_calls = mock_hf.fetch_daily_papers.call_args_list
+        assert len(hf_calls) == 2
+        hf_dates = {c.args[0] for c in hf_calls}
+        assert "2026-04-28" in hf_dates  # UTC today
+        assert "2026-04-27" in hf_dates  # UTC yesterday
+        assert "2026-04-29" not in hf_dates  # JST date should NOT be used
+
+    @patch("handler.lambda_client")
+    @patch("handler._save_papers", return_value=2)
+    @patch("handler.s2_client")
+    @patch("handler.arxiv_client")
+    @patch("handler.hf_client")
+    def test_hf_dedup_across_dates(
+        self,
+        mock_hf: MagicMock,
+        mock_arxiv: MagicMock,
+        mock_s2: MagicMock,
+        mock_save: MagicMock,
+        mock_lambda: MagicMock,
+    ) -> None:
+        """Papers appearing in both HF dates should be deduped, keeping today's data."""
+        paper_today = {"arxiv_id": "001", "title": "Paper", "hf_upvotes": 50, "source": "huggingface"}
+        paper_yesterday_dup = {"arxiv_id": "001", "title": "Paper", "hf_upvotes": 30, "source": "huggingface"}
+        paper_yesterday_only = {"arxiv_id": "002", "title": "Other", "hf_upvotes": 10, "source": "huggingface"}
+
+        mock_hf.fetch_daily_papers.side_effect = [
+            [paper_today],          # UTC today
+            [paper_yesterday_dup, paper_yesterday_only],  # UTC yesterday
+        ]
+        mock_arxiv.fetch_recent_papers.return_value = []
+        mock_s2.fetch_batch.return_value = {}
+
+        with patch("handler.datetime") as mock_dt:
+            fake_utc = datetime(2026, 4, 28, 21, 0, 0, tzinfo=UTC)
+            mock_dt.now.side_effect = lambda tz=None: fake_utc if tz == UTC else fake_utc.astimezone(timezone(timedelta(hours=9)))
+            mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+
+            result = self.handler_mod.handler({}, None)
+
+        body = json.loads(result["body"])
+        # 2 unique HF papers (001 deduped, 002 from yesterday)
+        assert body["hf_count"] == 2
+
+    @patch("handler.lambda_client")
+    @patch("handler._save_papers", return_value=1)
+    @patch("handler.s2_client")
+    @patch("handler.arxiv_client")
+    @patch("handler.hf_client")
+    def test_explicit_date_derives_hf_dates_from_collection_date(
+        self,
+        mock_hf: MagicMock,
+        mock_arxiv: MagicMock,
+        mock_s2: MagicMock,
+        mock_save: MagicMock,
+        mock_lambda: MagicMock,
+    ) -> None:
+        """When event has explicit date (backfill), HF dates derive from it."""
+        mock_hf.fetch_daily_papers.return_value = []
+        mock_arxiv.fetch_recent_papers.return_value = [
+            {"arxiv_id": "001", "title": "Test", "source": "arxiv"},
+        ]
+        mock_s2.fetch_batch.return_value = {}
+
+        # Backfill for JST 2026-04-20 → HF should query 04-19 and 04-18
+        self.handler_mod.handler({"date": "2026-04-20"}, None)
+
+        hf_calls = mock_hf.fetch_daily_papers.call_args_list
+        assert len(hf_calls) == 2
+        hf_dates = {c.args[0] for c in hf_calls}
+        assert "2026-04-19" in hf_dates  # JST-1 day
+        assert "2026-04-18" in hf_dates  # JST-2 days
