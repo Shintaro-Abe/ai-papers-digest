@@ -7,7 +7,10 @@ const { renderDetail, renderDigest } = require('./html-generator');
 const { upload } = require('./s3-uploader');
 const { generateEmbedding } = require('./embedding-client');
 const { putVector, getVector, querySimilar } = require('./vectors-client');
-const { generate: generateDashboard } = require('./dashboard-generator');
+const {
+  generate: generateDashboard,
+  regenerateAllPapersAndDigests,
+} = require('./dashboard-generator');
 
 /**
  * Sleep for the given number of milliseconds.
@@ -167,6 +170,18 @@ async function main() {
     console.error(`[summarizer] Failed to generate dashboard: ${err.message}`);
     console.error(err.stack);
     // Non-fatal: don't exit, just log
+  }
+
+  // ===== Re-generate all historical paper / digest pages =====
+  // Propagates template/style updates (e.g., nav changes) to existing pages.
+  // Uses cached summaries; no LLM calls.
+  try {
+    console.log(`[summarizer] Re-generating all paper/digest pages...`);
+    await regenerateAllPapersAndDigests();
+  } catch (err) {
+    console.error(`[summarizer] Failed to regenerate historical pages: ${err.message}`);
+    console.error(err.stack);
+    // Non-fatal
   }
 
   console.log(

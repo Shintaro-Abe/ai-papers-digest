@@ -327,6 +327,17 @@ body {
   color: var(--color-primary);
 }
 
+.nav-links a.logout-link {
+  margin-left: auto;
+  padding-left: 1rem;
+  border-left: 1px solid var(--color-border, #e5e7eb);
+  color: var(--color-text-tertiary, #6b7280);
+}
+
+.nav-links a.logout-link:hover {
+  color: var(--color-danger, #dc2626);
+}
+
 /* ===== Tag Grid ===== */
 .tag-grid {
   display: grid;

@@ -3,12 +3,13 @@
 const fs = require('fs');
 const path = require('path');
 const { DynamoDBClient } = require('@aws-sdk/client-dynamodb');
-const { DynamoDBDocumentClient, ScanCommand } = require('@aws-sdk/lib-dynamodb');
+const { DynamoDBDocumentClient, BatchGetCommand, ScanCommand } = require('@aws-sdk/lib-dynamodb');
 const { upload } = require('./s3-uploader');
-const { escapeHtml } = require('./html-generator');
+const { escapeHtml, renderDetail, renderDigest } = require('./html-generator');
 
 const TEMPLATES_DIR = path.resolve(__dirname, '../templates');
 const SUMMARIES_TABLE = process.env.SUMMARIES_TABLE;
+const PAPERS_TABLE = process.env.PAPERS_TABLE;
 
 const rawClient = new DynamoDBClient({});
 const docClient = DynamoDBDocumentClient.from(rawClient);
@@ -185,8 +186,116 @@ async function generate(currentDate) {
   console.log(`[dashboard] Dashboard generation complete. Tags: ${tagMap.size}, Papers: ${allSummaries.length}`);
 }
 
+/**
+ * Fetch papers from the papers table for the given arxiv_ids in batches of 100.
+ * Returns a Map<arxiv_id, paper>.
+ */
+async function batchGetPapers(arxivIds) {
+  const papers = new Map();
+  if (!PAPERS_TABLE || arxivIds.length === 0) return papers;
+
+  for (let i = 0; i < arxivIds.length; i += 100) {
+    const chunk = arxivIds.slice(i, i + 100);
+    const resp = await docClient.send(
+      new BatchGetCommand({
+        RequestItems: {
+          [PAPERS_TABLE]: { Keys: chunk.map((aid) => ({ arxiv_id: aid })) },
+        },
+      }),
+    );
+    const items = (resp.Responses && resp.Responses[PAPERS_TABLE]) || [];
+    for (const p of items) papers.set(p.arxiv_id, p);
+  }
+  return papers;
+}
+
+/**
+ * Run a list of async tasks with bounded concurrency.
+ */
+async function runWithConcurrency(items, limit, worker) {
+  const queue = items.slice();
+  let active = 0;
+  let resolveAll;
+  let rejectAll;
+  const done = new Promise((resolve, reject) => {
+    resolveAll = resolve;
+    rejectAll = reject;
+  });
+
+  function next() {
+    if (queue.length === 0 && active === 0) {
+      resolveAll();
+      return;
+    }
+    while (active < limit && queue.length > 0) {
+      const item = queue.shift();
+      active += 1;
+      Promise.resolve(worker(item))
+        .catch((err) => {
+          console.warn(`[regenerate] task error: ${err.message}`);
+        })
+        .finally(() => {
+          active -= 1;
+          next();
+        });
+    }
+  }
+  next();
+  return done;
+}
+
+/**
+ * Re-render every existing paper detail page and digest page using the
+ * latest templates. Idempotent: overwrites in place. Used to propagate
+ * template changes (e.g., nav updates) to historical pages without
+ * re-invoking the LLM.
+ */
+async function regenerateAllPapersAndDigests() {
+  if (!PAPERS_TABLE) {
+    console.warn('[regenerate] PAPERS_TABLE not set; skipping.');
+    return;
+  }
+
+  const allSummaries = await getAllSummaries();
+  if (allSummaries.length === 0) return;
+
+  // 1. Resolve papers in batches
+  const arxivIds = allSummaries.map((s) => s.arxiv_id).filter(Boolean);
+  const paperMap = await batchGetPapers(arxivIds);
+  console.log(
+    `[regenerate] Resolved ${paperMap.size}/${arxivIds.length} papers from DynamoDB`,
+  );
+
+  // 2. Re-render every paper detail page
+  let detailCount = 0;
+  await runWithConcurrency(allSummaries, 8, async (summary) => {
+    const paper = paperMap.get(summary.arxiv_id);
+    if (!paper) return; // paper deleted/unavailable
+    const html = renderDetail(paper, summary);
+    await upload(`papers/${summary.arxiv_id}.html`, html);
+    detailCount += 1;
+  });
+  console.log(`[regenerate] Re-uploaded ${detailCount} paper detail pages`);
+
+  // 3. Group summaries by date and re-render each digest
+  const byDate = new Map();
+  for (const s of allSummaries) {
+    if (!s.date) continue;
+    if (!byDate.has(s.date)) byDate.set(s.date, []);
+    byDate.get(s.date).push(s);
+  }
+  let digestCount = 0;
+  await runWithConcurrency([...byDate.entries()], 4, async ([date, summaries]) => {
+    const html = renderDigest(date, summaries);
+    await upload(`digest/${date}.html`, html);
+    digestCount += 1;
+  });
+  console.log(`[regenerate] Re-uploaded ${digestCount} daily digest pages`);
+}
+
 module.exports = {
   generate,
+  regenerateAllPapersAndDigests,
   aggregateTags,
   renderTagList,
   renderTagPage,
