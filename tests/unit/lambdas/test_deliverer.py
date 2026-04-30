@@ -76,6 +76,37 @@ class TestBuildPaperMessage:
         text = msg["blocks"][0]["text"]["text"]
         assert "Test Paper" in text
 
+    def test_paper_message_with_hf_upvotes_badge(self) -> None:
+        summary = {
+            "arxiv_id": "2604.25917",
+            "title_original": "Recursive Multi-Agent Systems",
+            "title_ja": "",
+            "compact_summary": "summary",
+            "tags": [],
+        }
+        msg = build_paper_message(
+            summary, "https://example.com/papers/2604.25917.html", hf_upvotes=121
+        )
+        text = msg["blocks"][0]["text"]["text"]
+        assert "🤗" in text
+        assert "HF Daily Papers" in text
+        assert "121 upvotes" in text
+
+    def test_paper_message_no_badge_when_zero_upvotes(self) -> None:
+        summary = {
+            "arxiv_id": "2604.99999",
+            "title_original": "ArXiv-only Paper",
+            "title_ja": "",
+            "compact_summary": "summary",
+            "tags": [],
+        }
+        msg = build_paper_message(
+            summary, "https://example.com/papers/2604.99999.html", hf_upvotes=0
+        )
+        text = msg["blocks"][0]["text"]["text"]
+        assert "🤗" not in text
+        assert "HF Daily Papers" not in text
+
 
 class TestPostMessage:
     """Tests for slack_client.post_message (chat.postMessage)."""

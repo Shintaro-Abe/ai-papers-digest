@@ -45,6 +45,34 @@ def _get_summaries_by_date(table_name: str, date: str) -> list[dict[str, Any]]:
     return items
 
 
+def _get_hf_upvotes(table_name: str, arxiv_ids: list[str]) -> dict[str, int]:
+    """Fetch hf_upvotes for given arxiv_ids from papers table via BatchGetItem."""
+    if not arxiv_ids:
+        return {}
+    table = dynamodb.Table(table_name)
+    result: dict[str, int] = {}
+    # BatchGetItem limit is 100 keys per call
+    for i in range(0, len(arxiv_ids), 100):
+        chunk = arxiv_ids[i : i + 100]
+        try:
+            resp = dynamodb.batch_get_item(
+                RequestItems={
+                    table.name: {
+                        "Keys": [{"arxiv_id": aid} for aid in chunk],
+                        "ProjectionExpression": "arxiv_id, hf_upvotes",
+                    }
+                }
+            )
+            for item in resp.get("Responses", {}).get(table.name, []):
+                aid = item.get("arxiv_id")
+                upv = item.get("hf_upvotes", 0)
+                if aid:
+                    result[aid] = int(upv)
+        except Exception:
+            logger.exception("Failed to batch_get_item for hf_upvotes")
+    return result
+
+
 def _record_delivery(table_name: str, date: str, arxiv_id: str, message_ts: str | None) -> None:
     """Record a single delivery log entry with message ts."""
     table = dynamodb.Table(table_name)
@@ -71,6 +99,7 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
 
     summaries_table = os.environ["SUMMARIES_TABLE"]
     delivery_log_table = os.environ["DELIVERY_LOG_TABLE"]
+    papers_table = os.environ["PAPERS_TABLE"]
     bot_token_arn = os.environ["SLACK_BOT_TOKEN_SECRET_ARN"]
     channel_id = os.environ["SLACK_CHANNEL_ID"]
     base_url = os.environ["DETAIL_PAGE_BASE_URL"]
@@ -83,7 +112,11 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
 
     logger.info("Found %d summaries for delivery", len(summaries))
 
-    # 2. Build messages
+    # 2. Fetch hf_upvotes for badges
+    arxiv_ids = [s["arxiv_id"] for s in summaries]
+    upvotes_map = _get_hf_upvotes(papers_table, arxiv_ids)
+
+    # 3. Build messages
     messages: list[dict[str, Any]] = []
 
     # Header (no arxiv_id)
@@ -95,13 +128,15 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     for summary in summaries:
         arxiv_id = summary["arxiv_id"]
         detail_url = f"{base_url}/papers/{arxiv_id}.html"
-        msg = message_builder.build_paper_message(summary, detail_url)
+        msg = message_builder.build_paper_message(
+            summary, detail_url, hf_upvotes=upvotes_map.get(arxiv_id, 0)
+        )
         messages.append({"blocks": msg["blocks"], "arxiv_id": arxiv_id})
 
-    # 3. Post to Slack via Bot Token + chat.postMessage
+    # 4. Post to Slack via Bot Token + chat.postMessage
     results = slack_client.post_messages(bot_token_arn, channel_id, messages)
 
-    # 4. Record delivery log with ts
+    # 5. Record delivery log with ts
     posted_count = 0
     for result in results:
         arxiv_id = result.get("arxiv_id")

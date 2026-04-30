@@ -33,7 +33,11 @@ def build_header_message(date: str, paper_count: int, digest_url: str) -> dict[s
     }
 
 
-def build_paper_message(summary: dict[str, Any], detail_page_url: str) -> dict[str, Any]:
+def build_paper_message(
+    summary: dict[str, Any],
+    detail_page_url: str,
+    hf_upvotes: int = 0,
+) -> dict[str, Any]:
     """Build a message for a single paper."""
     title_original = summary.get("title_original", summary.get("title", ""))
     title_ja = summary.get("title_ja", "")
@@ -41,7 +45,10 @@ def build_paper_message(summary: dict[str, Any], detail_page_url: str) -> dict[s
     tags = summary.get("tags", [])
     arxiv_id = summary["arxiv_id"]
 
-    text_parts = [f"*📄 {title_original}*"]
+    text_parts = []
+    if hf_upvotes > 0:
+        text_parts.append(f"🤗 *HF Daily Papers* • {hf_upvotes} upvotes")
+    text_parts.append(f"*📄 {title_original}*")
     if title_ja:
         text_parts.append(f"_{title_ja}_")
     text_parts.append("")

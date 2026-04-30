@@ -209,6 +209,7 @@ module "lambda_deliverer" {
   environment_variables = {
     SUMMARIES_TABLE            = module.dynamodb.summaries_table_name
     DELIVERY_LOG_TABLE         = module.dynamodb.delivery_log_table_name
+    PAPERS_TABLE               = module.dynamodb.papers_table_name
     SLACK_BOT_TOKEN_SECRET_ARN = aws_secretsmanager_secret.slack_bot_token.arn
     SLACK_CHANNEL_ID           = "C0AQAJC41LG"
     DETAIL_PAGE_BASE_URL       = module.s3_cloudfront.detail_page_base_url
@@ -220,6 +221,11 @@ module "lambda_deliverer" {
       effect    = "Allow"
       actions   = ["dynamodb:Query", "dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem", "dynamodb:Scan"]
       resources = [module.dynamodb.summaries_table_arn, module.dynamodb.delivery_log_table_arn]
+    },
+    {
+      effect    = "Allow"
+      actions   = ["dynamodb:BatchGetItem", "dynamodb:GetItem"]
+      resources = [module.dynamodb.papers_table_arn]
     },
     {
       effect    = "Allow"
