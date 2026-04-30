@@ -1,0 +1,12 @@
+{
+  "name": "ai-papers-digest-auth-edge",
+  "version": "1.0.0",
+  "description": "Lambda@Edge function for Cognito JWT validation",
+  "main": "index.js",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "dependencies": {
+    "aws-jwt-verify": "^4.0.1"
+  }
+}

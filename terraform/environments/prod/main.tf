@@ -13,6 +13,13 @@ provider "aws" {
   region = var.aws_region
 }
 
+# Lambda@Edge MUST be deployed in us-east-1 regardless of where the rest of
+# the stack lives. We use a provider alias to scope Cognito/Lambda@Edge resources.
+provider "aws" {
+  alias  = "us_east_1"
+  region = "us-east-1"
+}
+
 # --- Data Sources ---
 
 data "aws_caller_identity" "current" {}
@@ -63,12 +70,48 @@ module "dynamodb" {
   tags   = var.tags
 }
 
+# --- Cognito User Pool (for site authentication) ---
+#
+# callback_urls / logout_urls reference `var.cloudfront_domain` (not the
+# s3_cloudfront module output) to avoid a circular dependency:
+#   s3_cloudfront -> auth_edge -> cognito -> s3_cloudfront
+
+module "cognito" {
+  source = "../../modules/cognito"
+
+  user_pool_name = "ai-papers-digest-users"
+  domain_prefix  = "ai-papers-digest-${data.aws_caller_identity.current.account_id}"
+  callback_urls  = ["https://${var.cloudfront_domain}/auth/callback.html"]
+  logout_urls    = ["https://${var.cloudfront_domain}/auth/logout.html"]
+  admin_email    = var.admin_email
+  tags           = var.tags
+}
+
+# --- Lambda@Edge for Cognito JWT validation (us-east-1) ---
+
+module "auth_edge" {
+  source = "../../modules/lambda-edge"
+
+  providers = {
+    aws.us_east_1 = aws.us_east_1
+  }
+
+  function_name  = "ai-papers-digest-auth-edge"
+  user_pool_id   = module.cognito.user_pool_id
+  client_id      = module.cognito.client_id
+  cognito_region = var.aws_region
+  tags           = var.tags
+}
+
 # --- S3 + CloudFront ---
 
 module "s3_cloudfront" {
-  source      = "../../modules/s3-cloudfront"
-  bucket_name = var.pages_bucket_name
-  tags        = var.tags
+  source = "../../modules/s3-cloudfront"
+
+  bucket_name          = var.pages_bucket_name
+  enable_auth          = var.enable_auth
+  auth_edge_lambda_arn = module.auth_edge.qualified_arn
+  tags                 = var.tags
 }
 
 # --- ECS ---

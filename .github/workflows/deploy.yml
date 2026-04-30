@@ -77,4 +77,37 @@ jobs:
 
       - name: Sync static assets to S3
         run: |
-          aws s3 sync static/ s3://ai-papers-digest-pages-${{ secrets.AWS_ACCOUNT_ID }}/assets/ --delete
+          BUCKET="ai-papers-digest-pages-${{ secrets.AWS_ACCOUNT_ID }}"
+          # 1. Sync everything except auth/ to /assets/
+          aws s3 sync static/ "s3://$BUCKET/assets/" --exclude "auth/*" --delete
+
+          # 2. Auth pages: substitute Cognito + CloudFront values into config.js,
+          #    then sync to /auth/ at the bucket root (CloudFront serves /auth/* directly).
+          POOL_ID=$(aws cognito-idp list-user-pools --max-results 60 \
+            --query "UserPools[?Name=='ai-papers-digest-users'].Id | [0]" --output text)
+          if [ -z "$POOL_ID" ] || [ "$POOL_ID" = "None" ]; then
+            echo "Cognito user pool 'ai-papers-digest-users' not found. Skipping auth page sync."
+            exit 0
+          fi
+
+          CLIENT_ID=$(aws cognito-idp list-user-pool-clients \
+            --user-pool-id "$POOL_ID" \
+            --query "UserPoolClients[?ClientName=='ai-papers-digest-users-web'].ClientId | [0]" \
+            --output text)
+          DOMAIN_PREFIX=$(aws cognito-idp describe-user-pool \
+            --user-pool-id "$POOL_ID" \
+            --query 'UserPool.Domain' --output text)
+          COGNITO_DOMAIN="${DOMAIN_PREFIX}.auth.${AWS_REGION}.amazoncognito.com"
+          CLOUDFRONT_DOMAIN=$(aws cloudfront list-distributions \
+            --query "DistributionList.Items[?contains(Comment, 'AI Papers Digest')].DomainName | [0]" \
+            --output text)
+
+          mkdir -p /tmp/auth-build
+          cp -r static/auth/* /tmp/auth-build/
+          sed -i \
+            -e "s|__COGNITO_DOMAIN__|$COGNITO_DOMAIN|g" \
+            -e "s|__COGNITO_CLIENT_ID__|$CLIENT_ID|g" \
+            -e "s|__CLOUDFRONT_DOMAIN__|$CLOUDFRONT_DOMAIN|g" \
+            /tmp/auth-build/config.js
+
+          aws s3 sync /tmp/auth-build/ "s3://$BUCKET/auth/" --delete

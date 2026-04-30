@@ -1,0 +1,100 @@
+// Lambda@Edge: viewer-request JWT validation
+//
+// This function runs at every CloudFront edge location for incoming requests.
+// It verifies a Cognito-issued id_token cookie (RS256) and redirects to a
+// static login helper page when missing or invalid.
+//
+// Lambda@Edge constraints:
+// - No environment variables (USER_POOL_ID and CLIENT_ID are templated in)
+// - Must be deployed in us-east-1
+// - 5-second timeout for viewer-request
+// - 128MB memory, 1MB function size limit
+//
+// Template variables (replaced by Terraform):
+//   ${USER_POOL_ID}  - Cognito User Pool ID
+//   ${CLIENT_ID}     - Cognito App Client ID
+//   ${REGION}        - Cognito User Pool region
+
+'use strict';
+
+const { CognitoJwtVerifier } = require('aws-jwt-verify');
+
+// Cached verifier — JWKS is fetched once per Lambda container and re-used.
+const verifier = CognitoJwtVerifier.create({
+  userPoolId: '${USER_POOL_ID}',
+  clientId: '${CLIENT_ID}',
+  tokenUse: 'id',
+});
+
+const BYPASS_PATHS = new Set([
+  '/favicon.ico',
+  '/robots.txt',
+]);
+
+// Allowed file extensions under /auth/ (HTML + JS for the OAuth flow).
+// We deliberately do NOT use a wildcard prefix to avoid leaking unrelated
+// content placed under /auth/ in the future.
+const AUTH_ALLOWED_FILES = new Set([
+  '/auth/login.html',
+  '/auth/callback.html',
+  '/auth/logout.html',
+  '/auth/login.js',
+  '/auth/callback.js',
+  '/auth/logout.js',
+  '/auth/auth-helpers.js',
+  '/auth/config.js',
+]);
+
+exports.handler = async (event) => {
+  const req = event.Records[0].cf.request;
+  const uri = req.uri;
+
+  // 1. Bypass auth for the public OAuth flow files and well-known paths.
+  if (BYPASS_PATHS.has(uri)) return req;
+  if (AUTH_ALLOWED_FILES.has(uri)) return req;
+  if (uri.startsWith('/assets/')) return req;
+
+  // 2. Extract id_token from Cookie header
+  const cookieHeader = req.headers.cookie;
+  const jwt = extractCookie(cookieHeader, 'id_token');
+  if (!jwt) return redirectToLogin(uri);
+
+  // 3. Verify JWT (RS256 signature + iss + aud + exp + token_use)
+  try {
+    await verifier.verify(jwt);
+    return req;
+  } catch (_err) {
+    return redirectToLogin(uri);
+  }
+};
+
+function extractCookie(cookieHeaders, name) {
+  if (!cookieHeaders || cookieHeaders.length === 0) return null;
+  // CloudFront passes cookies as an array of {key, value} pairs.
+  // The value field contains the full Cookie header string (e.g., "a=1; b=2").
+  for (const header of cookieHeaders) {
+    const parts = header.value.split(';');
+    for (const part of parts) {
+      const [k, ...rest] = part.trim().split('=');
+      if (k === name) return rest.join('=');
+    }
+  }
+  return null;
+}
+
+function redirectToLogin(originalUri) {
+  return {
+    status: '302',
+    statusDescription: 'Found',
+    headers: {
+      location: [{
+        key: 'Location',
+        value: '/auth/login.html?dest=' + encodeURIComponent(originalUri),
+      }],
+      'cache-control': [{
+        key: 'Cache-Control',
+        value: 'no-store',
+      }],
+    },
+  };
+}

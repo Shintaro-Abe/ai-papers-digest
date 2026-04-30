@@ -26,6 +26,10 @@ dist/
 # Lambda Layer ビルド成果物
 src/lambdas/layer/python/
 
+# Lambda@Edge ビルド成果物（index.js は templatefile() で生成、auth-edge.zip は archive_file で生成）
+terraform/modules/lambda-edge/auth-edge.zip
+terraform/modules/lambda-edge/auth/index.js
+
 # IDE
 .vscode/
 .idea/

@@ -95,6 +95,60 @@ resource "aws_s3_bucket_policy" "pages" {
 }
 
 ################################################################################
+# CloudFront Response Headers Policy - Security headers (CSP, HSTS, etc.)
+################################################################################
+#
+# CSP allows the same origin for everything by default, plus the Cognito
+# Hosted UI domain for fetch (token endpoint) and form submissions during
+# the OAuth redirect flow.
+#
+# Note: connect-src and form-action wildcards (`https://*.amazoncognito.com`)
+# match all Cognito User Pool domains in any region; tighten if multi-tenant.
+
+resource "aws_cloudfront_response_headers_policy" "security" {
+  name = "${var.bucket_name}-security-headers"
+
+  security_headers_config {
+    content_security_policy {
+      override = true
+      content_security_policy = join("; ", [
+        "default-src 'self'",
+        "script-src 'self'",
+        "style-src 'self'",
+        "img-src 'self' data:",
+        "connect-src 'self' https://*.amazoncognito.com https://cognito-idp.*.amazonaws.com",
+        "form-action 'self' https://*.amazoncognito.com",
+        "frame-ancestors 'none'",
+        "base-uri 'self'",
+        "object-src 'none'",
+      ])
+    }
+    strict_transport_security {
+      override                   = true
+      access_control_max_age_sec = 31536000
+      include_subdomains         = true
+      preload                    = true
+    }
+    content_type_options {
+      override = true
+    }
+    frame_options {
+      override     = true
+      frame_option = "DENY"
+    }
+    referrer_policy {
+      override        = true
+      referrer_policy = "strict-origin-when-cross-origin"
+    }
+    xss_protection {
+      override   = true
+      protection = true
+      mode_block = true
+    }
+  }
+}
+
+################################################################################
 # CloudFront Distribution
 ################################################################################
 
@@ -118,7 +172,19 @@ resource "aws_cloudfront_distribution" "pages" {
     cached_methods         = ["GET", "HEAD"]
     compress               = true
 
-    cache_policy_id = "4135ea2d-6df8-44a3-9df3-4b5a84be39ad" # CachingDisabled
+    cache_policy_id            = "4135ea2d-6df8-44a3-9df3-4b5a84be39ad" # CachingDisabled
+    response_headers_policy_id = aws_cloudfront_response_headers_policy.security.id
+
+    # Lambda@Edge auth (Cognito JWT validation).
+    # Toggle off via `var.enable_auth = false` for instant rollback (~few minutes).
+    dynamic "lambda_function_association" {
+      for_each = var.enable_auth ? [1] : []
+      content {
+        event_type   = "viewer-request"
+        lambda_arn   = var.auth_edge_lambda_arn
+        include_body = false
+      }
+    }
   }
 
   custom_error_response {
