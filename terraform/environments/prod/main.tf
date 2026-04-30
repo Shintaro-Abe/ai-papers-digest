@@ -593,6 +593,17 @@ module "github_oidc" {
         ]
         Resource = "arn:aws:codebuild:ap-northeast-1:${data.aws_caller_identity.current.account_id}:project/ai-papers-digest-*"
       },
+      {
+        Sid    = "AuthConfigLookup"
+        Effect = "Allow"
+        Action = [
+          "cognito-idp:ListUserPools",
+          "cognito-idp:ListUserPoolClients",
+          "cognito-idp:DescribeUserPool",
+          "cloudfront:ListDistributions",
+        ]
+        Resource = "*"
+      },
     ]
   })
 
