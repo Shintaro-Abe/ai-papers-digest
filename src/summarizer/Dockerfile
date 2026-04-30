@@ -1,8 +1,8 @@
 FROM node:22-slim
 RUN npm install -g @anthropic-ai/claude-code
 WORKDIR /app
-COPY package.json ./
-RUN npm install --production
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev
 COPY src/ ./src/
 COPY templates/ ./templates/
 COPY entrypoint.sh ./
