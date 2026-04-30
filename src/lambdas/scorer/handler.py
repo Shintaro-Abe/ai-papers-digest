@@ -3,12 +3,12 @@
 import json
 import logging
 import os
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta, timezone
+from decimal import Decimal
 from typing import Any
 
 import boto3
 from boto3.dynamodb.conditions import Key
-
 from filter import filter_papers
 from scoring import calculate_scores
 
@@ -65,7 +65,7 @@ def _get_recent_feedback(feedback_table_name: str | None, lookback_days: int = 2
     if not feedback_table_name:
         return []
     table = dynamodb.Table(feedback_table_name)
-    cutoff = (datetime.now(timezone.utc) - timedelta(days=lookback_days)).isoformat()
+    cutoff = (datetime.now(UTC) - timedelta(days=lookback_days)).isoformat()
 
     items: list[dict[str, Any]] = []
     try:
@@ -180,17 +180,23 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
 
     logger.info("Selected %d papers (top score=%.4f)", len(selected), selected[0]["score"])
 
-    # 6. Save scores back to papers table
+    # 6. Save scores back to papers table.
+    # DynamoDB resource API requires Decimal for numeric attributes, not float.
     table = dynamodb.Table(papers_table)
+    update_failures = 0
     for paper in scored:
         try:
             table.update_item(
                 Key={"arxiv_id": paper["arxiv_id"]},
                 UpdateExpression="SET score = :s",
-                ExpressionAttributeValues={":s": paper["score"]},
+                ExpressionAttributeValues={":s": Decimal(str(paper["score"]))},
             )
         except Exception:
-            logger.warning("Failed to update score for %s", paper["arxiv_id"])
+            update_failures += 1
+            if update_failures <= 3:
+                logger.exception("Failed to update score for %s", paper["arxiv_id"])
+    if update_failures:
+        logger.warning("Score update failures: %d / %d", update_failures, len(scored))
 
     # 7. Launch Fargate task
     selected_ids = [p["arxiv_id"] for p in selected]
