@@ -386,7 +386,7 @@ score = w1 × normalize(hf_upvotes)
 ```
 
 **履歴の保存:**
-毎回の実行で `config` テーブルの `scoring_weights_history` キーに直近 12 件の `{date, w1, w2, w3, w4, skipped, feedback_count, papers_count}` を append（古いものから削除）。Phase 3 ダッシュボードの重み履歴チャートで時系列描画する。
+毎回の実行で `config` テーブルの `scoring_weights_history` キーに直近 12 件の `{date, w1, w2, w3, w4, skipped, feedback_count, papers_count}` を append（古いものから削除）。監視ダッシュボードの重み履歴チャート（FR4）と学習ループチャート（FR8）のデータソースとして時系列描画する。
 
 ### 3.7 telemetry 収集（pipeline-runs upsert、監視ダッシュボード用）
 
@@ -900,11 +900,28 @@ sequenceDiagram
 
 id_token の有効期限（60 min）切れ後、`/auth/login.html` が `refresh_token` Cookie の有無を確認し、あれば Cognito Hosted UI を経由せずに新しい id_token を取得して dest にリダイレクトする。
 
-## 10. 監視ダッシュボード（Phase 3 で実装予定）
+## 10. 監視ダッシュボード（実装済み）
 
 ### 概要
 
-`pipeline_runs` テーブル（§4）に蓄積された 1 日 1 行のラン記録を時系列集計し、`/dashboard.html` に可視化する。Phase 2 で**データ収集基盤までは本番稼働済み**。Phase 3 でテンプレートと集計ロジック、Chart.js 描画を追加する。
+`pipeline_runs` テーブル（§4）に蓄積された 1 日 1 行のラン記録を時系列集計し、`/dashboard.html` に可視化する。**Phase 3 でテンプレート・集計ロジック・Chart.js 描画まで実装済み・本番デプロイ済み。** 毎日 JST 06:00 のパイプライン実行の末尾で `generateMonitoring(targetDate)` が自動実行され S3 に upload される。
+
+### 生成フロー
+
+```
+summarizer.js（Fargate）
+  └── generateMonitoring(targetDate)        ← dashboard-generator.js
+        ├── fetchPipelineRunsLast30Days()   → pipeline_runs（scan）
+        ├── fetchSummariesLast30Days()      → summaries（scan）
+        ├── fetchFeedbackLast30Days()       → feedback（scan）
+        ├── fetchWeightHistory()            → config.scoring_weights_history
+        ├── fetchPapersForSummaries()       → papers（batchGet）
+        ├── 集計（10関数）
+        ├── renderDashboard(data)           → dashboard.html テンプレート展開 + JSON 注入
+        └── upload → s3://…/dashboard.html
+```
+
+失敗時もパイプライン継続（try/catch で non-fatal）。
 
 ### データソース
 
@@ -916,17 +933,27 @@ id_token の有効期限（60 min）切れ後、`/auth/login.html` が `refresh_
 | `feedback` | カテゴリ別 Like 率の時系列 |
 | `config.scoring_weights_history` | 重み (w1〜w4) の時系列線グラフ |
 
-### 描画予定チャート（Phase 3〜4）
+### 実装済みチャート
 
-| ID | チャート | データソース |
-|---|---|---|
-| FR1 | 日次収集件数（HF / arXiv 内訳） | pipeline_runs.papers_collected_* |
-| FR2 | 最新スコア内訳（top 7） | papers + weights_snapshot |
-| FR3 | カテゴリ別 Like 率推移 | feedback |
-| FR4 | スコアリング重み履歴 | config.scoring_weights_history |
-| FR5 | サマリーカード（コスト合計、トークン合計、選定率、品質勝率） | pipeline_runs |
-| FR6 | パイプラインヘルス（ステージ別 status 履歴） | pipeline_runs |
-| FR7 | コスト推移 | pipeline_runs.claude_cost_usd |
-| FR8 | 学習ループ稼働状況（重み変化量、skip カウント） | weight_adjuster_skipped + history |
-| FR9 | 多様性メトリクス（HF/arXiv 内訳、カテゴリ分布、著者重複率） | papers |
-| FR10 | 要約品質スコア（claude/hf 勝率、平均スコア推移） | summaries.quality_winner / quality_score |
+| ID | チャート | 集計関数 | データソース |
+|---|---|---|---|
+| FR1 | 日次収集件数（HF / arXiv 内訳、棒グラフ） | `aggregateCollectionVolume()` | pipeline_runs.papers_collected_* |
+| FR2 | 最新スコア内訳（top 7、合計スコア棒＋tooltip） | `aggregateLatestScores()` | papers.score + summaries |
+| FR3 | カテゴリ別 Like 率推移（横棒グラフ） | `aggregateFeedbackByCategory()` | feedback.tags |
+| FR4 | スコアリング重み履歴（線グラフ） | `aggregateWeightHistory()` | config.scoring_weights_history |
+| FR5 | パイプラインヘルス（14 日間ヒートマップ） | `aggregatePipelineHealth()` | pipeline_runs.*_status |
+| FR6 | コスト推移（棒グラフ） | `aggregateCost()` | pipeline_runs.claude_cost_usd |
+| FR7 | 配信統計（線グラフ） | `aggregateDelivery()` | pipeline_runs.papers_delivered |
+| FR8 | 学習ループ稼働状況（重み変化量） | `aggregateLearningLoop()` | weight_adjuster history |
+| FR9 | 多様性メトリクス（HF 比率・カテゴリ分布） | `computeDiversity()` | papers.categories / authors |
+| FR10 | 要約品質スコア（claude/hf 勝率、平均スコア） | `aggregateQuality()` | summaries.quality_winner / quality_score |
+
+**サマリーカード（4件、7日間集計）**: 収集件数 / 選定件数 / 配信件数 / Claude コスト合計
+
+### テンプレート・フロントエンド
+
+| ファイル | 役割 |
+|---|---|
+| `src/summarizer/templates/dashboard.html` | 4 サマリーカード + 10 `<canvas>` 要素。`{{data_json}}` プレースホルダに集計 JSON を注入（`<` `>` `&` をエスケープ） |
+| `static/dashboard.js` | `#dashboard-data` script 要素から JSON 読み出し → Chart.js v4.4.4 で 10 チャート描画。空データ時はメッセージ表示 |
+| `static/style.css` | `.summary-cards` グリッド、`.chart-grid`（auto-fit min 420px、モバイルで 1 列） |

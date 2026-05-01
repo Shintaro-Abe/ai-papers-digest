@@ -82,14 +82,15 @@ src/
 │   │   ├── quality-judge.js           #   LLM-as-judge 品質比較（winner: claude/hf、usage 返却）
 │   │   ├── embedding-client.js        #   Bedrock Titan Embeddings V2（1024次元）【Phase 3】
 │   │   ├── vectors-client.js          #   S3 Vectors 読み書き・類似検索【Phase 3】
-│   │   ├── dashboard-generator.js     #   ダッシュボードページ生成【Phase 3】
+│   │   ├── dashboard-generator.js     #   ダッシュボードページ生成（generateDashboard + generateMonitoring）
 │   │   └── pipeline-runs.js           #   pipeline-runs テーブルへの upsert（Python 版と同等のセマンティクス）
 │   └── templates/
 │       ├── paper-detail.html          #   論文詳細ページテンプレート（類似論文付き）
 │       ├── daily-digest.html          #   日次ダイジェストページテンプレート
-│       ├── tag-list.html              #   タグ一覧ページテンプレート【Phase 3】
-│       ├── tag-page.html              #   タグ別論文一覧テンプレート【Phase 3】
-│       └── search.html                #   検索ページテンプレート【Phase 3】
+│       ├── tag-list.html              #   タグ一覧ページテンプレート
+│       ├── tag-page.html              #   タグ別論文一覧テンプレート
+│       ├── search.html                #   検索ページテンプレート
+│       └── dashboard.html             #   監視ダッシュボードテンプレート（4サマリーカード + 10チャート canvas、Chart.js CDN、JSON データ注入）
 │
 └── shared/                            # 共有ユーティリティ（deploy.yml が各 Lambda zip に flat 同梱）
     ├── constants.py                   #   定数定義（テーブル名プレフィックス、カテゴリ一覧等）
@@ -227,8 +228,9 @@ docs/
 
 ```
 static/
-├── style.css                          # 共通スタイルシート（モバイルレスポンシブ対応）
+├── style.css                          # 共通スタイルシート（モバイルレスポンシブ対応、ダッシュボード用 .summary-cards / .chart-grid 含む）
 ├── search.js                          # クライアントサイド検索（lunr.js + 日本語部分文字列検索）
+├── dashboard.js                       # 監視ダッシュボード Chart.js 描画スクリプト（10チャート、空データ時メッセージ表示）
 └── auth/                              # Cognito OAuth (PKCE) フロー用静的ページ
     ├── login.html                     # PKCE code_verifier 生成、silent refresh、Hosted UI へ 302
     ├── callback.html                  # code → tokens 交換、Cookie 設定後 dest にリダイレクト

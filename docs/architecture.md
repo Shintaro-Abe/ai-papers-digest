@@ -866,11 +866,11 @@ sequenceDiagram
 | 認証 OFF | `enable_auth=false` で `terraform apply` → `lambda_function_association` 解除 | **数分** で公開状態に戻る |
 | Lambda 完全削除 | Lambda@Edge は CloudFront から関連付けが完全に消えるまで数時間〜数日かかる（運用上の機能切り戻しとは別問題） |
 
-## 14. 監視ダッシュボードのデータ収集 (pipeline-runs)
+## 14. 監視ダッシュボード (pipeline-runs + dashboard 生成)
 
 ### 目的
 
-各パイプラインステージの観測値（実行状態、件数、トークン使用量、品質判定など）を 1 つの DynamoDB テーブルに集約し、Phase 3 で生成するダッシュボードのデータソースとする。
+各パイプラインステージの観測値（実行状態、件数、トークン使用量、品質判定など）を 1 つの DynamoDB テーブルに集約し、`/dashboard.html` として S3 に配信する。**Phase 3 で実装・本番デプロイ済み。**
 
 ### `pipeline-runs` テーブル
 
@@ -917,7 +917,7 @@ sequenceDiagram
 }
 ```
 
-直近 12 件まで保持（古いものから削除）。Phase 3 ダッシュボードの「重み履歴チャート」のデータソース。
+直近 12 件まで保持（古いものから削除）。ダッシュボードの「重み履歴チャート（FR4）」と「学習ループチャート（FR8）」のデータソース。
 
 ### `summaries` テーブルの拡張属性
 
@@ -927,4 +927,17 @@ DynamoDB スキーマレスのため Terraform 変更なし。新規属性:
 |---|---|---|
 | `quality_winner` | S | `claude` / `hf` — LLM-as-judge による勝者 |
 | `quality_score` | N | 1-10 の整数。勝者の品質スコア |
+
+### ダッシュボード生成フロー
+
+毎日 JST 06:00 の Fargate 実行の末尾で `generateMonitoring(targetDate)` が呼ばれ `/dashboard.html` を生成・S3 upload する（`summarizer.js` の try/catch で non-fatal）。
+
+| ステップ | 処理 |
+|---|---|
+| データ取得 | `pipeline_runs` / `summaries` / `feedback` / `config` / `papers` を並列 fetch（直近 30 日） |
+| 集計 | 10 種の集計関数（`aggregateCollectionVolume` 〜 `aggregateQuality`）+ `computeSummaryCards`（7 日集計） |
+| レンダリング | `dashboard.html` テンプレートに `{{data_json}}` を注入（`<` `>` `&` を Unicode エスケープ） |
+| 配信 | `static/dashboard.js` が `#dashboard-data` script 要素から JSON を読み Chart.js v4.4.4 で 10 チャートを描画 |
+
+詳細仕様は `docs/functional-design.md §10` 参照。
 
