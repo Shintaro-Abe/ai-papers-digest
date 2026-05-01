@@ -46,6 +46,16 @@
 | DLQ | Dead Letter Queue | `dlq` | Lambda の処理失敗メッセージを退避する SQS キュー |
 | ベクトルバケット | Vector Bucket | `vector_bucket` | S3 Vectors のバケットタイプ。ベクトルデータの格納・クエリに特化 |
 | ベクトルインデックス | Vector Index | `vector_index` | ベクトルバケット内のインデックス。類似度検索の単位 |
+| パイプライン実行履歴 | Pipeline Runs | `pipeline_runs` / `pipeline-runs` | 1 日 1 行（PK=date）で各ステージの状態・件数・トークン使用量を集約する DynamoDB テーブル。監視ダッシュボードのデータソース |
+| テレメトリ | Telemetry | `telemetry` | 各ステージが pipeline-runs に書き込む観測値（status / counts / tokens / cost / quality） |
+| ステージ状態 | Stage Status | `<stage>_status` | 各ステージの実行結果。`success` / `error` / `running` / `skipped` |
+| 実行終了時刻 | Finished At | `<stage>_finished_at` | 各ステージが pipeline-runs に書き込む ISO8601 終了時刻 |
+| 品質勝者 | Quality Winner | `quality_winner` | LLM-as-judge による自動生成要約 (`claude`) と HF AI 要約 (`hf`) の比較で勝った側 |
+| 品質スコア | Quality Score | `quality_score` | quality_winner の評価スコア (1-10 整数) |
+| ウェイト履歴 | Scoring Weights History | `scoring_weights_history` | weight_adjuster が毎週 append する直近 12 件の重みスナップショット (`config` テーブルの key) |
+| 認証エッジ関数 | Auth Edge | `auth-edge` | CloudFront viewer-request で動く Lambda@Edge。Cognito 発行の id_token (RS256) を検証 |
+| ホストドメイン | Cognito Domain | `cognito_domain` | Cognito Hosted UI のドメイン (`{prefix}.auth.{region}.amazoncognito.com`) |
+| 認証バイパス | Auth Bypass | `BYPASS_PATHS` / `AUTH_ALLOWED_FILES` | Lambda@Edge で認証を不要とするパス集合（OAuth フロー用 `/auth/*` と `/favicon.ico` 等） |
 
 ## 4. ビジネス用語
 
@@ -65,6 +75,8 @@
 | リアクション | Reaction | Slack の絵文字リアクション（👍 = Like, 👎 = Dislike） |
 | 詳細を見るリンク | Detail Link | Slack メッセージから S3 詳細ページへ遷移するボタン |
 | ヘッダーメッセージ | Header Message | 日次配信の最初に送信される「本日の論文数 + ダイジェストリンク」メッセージ |
+| ログイン誘導 | Login Redirect | 未認証ユーザーが保護済みページにアクセスした時に Lambda@Edge が `/auth/login.html?dest=...` へ 302 リダイレクトすること |
+| サイレントリフレッシュ | Silent Refresh | refresh_token Cookie が有効な場合に Cognito Hosted UI を経由せず id_token を更新する仕組み |
 
 ## 6. 英語・日本語対応表（コード上で頻出）
 
@@ -107,3 +119,7 @@
 | IaC | Infrastructure as Code | インフラのコード管理 |
 | PR | Pull Request | コードレビューリクエスト |
 | S3V | S3 Vectors | AWS のベクトルストアサービス（vector bucket） |
+| JWT | JSON Web Token | 署名付きトークン（id_token / access_token は RS256） |
+| RS256 | RSA-SHA256 | JWT 署名アルゴリズム。Cognito の id_token は RS256 のため Lambda@Edge が必要（CloudFront Function は HMAC のみ） |
+| PKCE | Proof Key for Code Exchange | OAuth 2.1 で client secret 不要にする仕組み。code_verifier + code_challenge を用いる |
+| TTL | Time To Live | DynamoDB の自動削除属性 (`ttl` epoch 秒)。pipeline-runs は 90 日 |

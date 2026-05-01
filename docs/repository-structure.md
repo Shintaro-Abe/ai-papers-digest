@@ -60,10 +60,13 @@ src/
 │   │   └── requirements.txt
 │   │
 │   ├── weight_adjuster/               # ウェイト再計算 Lambda【Phase 2】
-│   │   ├── handler.py                 #   エントリポイント
+│   │   ├── handler.py                 #   エントリポイント。pipeline-runs に upsert + scoring_weights_history を 12 件循環で保持
 │   │   ├── weight_optimizer.py        #   ウェイト最適化ロジック
 │   │   └── requirements.txt
 │   │
+│   └── token_refresher/               # Claude OAuth トークン自動リフレッシュ Lambda
+│       ├── handler.py                 #   エントリポイント。Secrets Manager 上の credentials を期限前に refresh
+│       └── requirements.txt
 │
 ├── summarizer/                        # Fargate 要約生成コンテナ（Node.js）
 │   ├── Dockerfile                     #   コンテナイメージ定義
@@ -72,14 +75,15 @@ src/
 │   ├── package.json                   #   npm 依存定義
 │   ├── src/
 │   │   ├── summarizer.js              #   メインエントリポイント
-│   │   ├── claude-client.js           #   claude -p CLI ラッパー
-│   │   ├── dynamo-client.js           #   DynamoDB 読み書き
+│   │   ├── claude-client.js           #   claude -p CLI ラッパー（usage トークン/コスト抽出含む）
+│   │   ├── dynamo-client.js           #   DynamoDB 読み書き（summaries に quality_winner / quality_score 保存）
 │   │   ├── s3-uploader.js             #   S3 HTML アップロード
 │   │   ├── html-generator.js          #   HTML テンプレートレンダリング
-│   │   ├── quality-judge.js           #   LLM-as-judge 品質比較
+│   │   ├── quality-judge.js           #   LLM-as-judge 品質比較（winner: claude/hf、usage 返却）
 │   │   ├── embedding-client.js        #   Bedrock Titan Embeddings V2（1024次元）【Phase 3】
 │   │   ├── vectors-client.js          #   S3 Vectors 読み書き・類似検索【Phase 3】
-│   │   └── dashboard-generator.js     #   ダッシュボードページ生成【Phase 3】
+│   │   ├── dashboard-generator.js     #   ダッシュボードページ生成【Phase 3】
+│   │   └── pipeline-runs.js           #   pipeline-runs テーブルへの upsert（Python 版と同等のセマンティクス）
 │   └── templates/
 │       ├── paper-detail.html          #   論文詳細ページテンプレート（類似論文付き）
 │       ├── daily-digest.html          #   日次ダイジェストページテンプレート
@@ -87,8 +91,9 @@ src/
 │       ├── tag-page.html              #   タグ別論文一覧テンプレート【Phase 3】
 │       └── search.html                #   検索ページテンプレート【Phase 3】
 │
-└── shared/                            # 共有ユーティリティ
-    └── constants.py                   #   定数定義（テーブル名プレフィックス、カテゴリ一覧等）
+└── shared/                            # 共有ユーティリティ（deploy.yml が各 Lambda zip に flat 同梱）
+    ├── constants.py                   #   定数定義（テーブル名プレフィックス、カテゴリ一覧等）
+    └── pipeline_runs.py               #   pipeline-runs upsert ヘルパー（DynamoDB 予約語エスケープ + 失敗握り潰し + retry 成功時の error クリア）
 ```
 
 ### `terraform/` — IaC
@@ -101,7 +106,7 @@ terraform/
 │
 ├── modules/
 │   ├── dynamodb/                      # DynamoDB テーブル群
-│   │   ├── main.tf                    #   papers, summaries, feedback, delivery_log, config
+│   │   ├── main.tf                    #   papers, summaries, feedback, delivery_log, paper_sources, config, pipeline_runs (TTL 90日)
 │   │   ├── variables.tf
 │   │   └── outputs.tf
 │   │
@@ -135,6 +140,20 @@ terraform/
 │   │   ├── variables.tf
 │   │   └── outputs.tf
 │   │
+│   ├── cognito/                       # Cognito User Pool + App Client + Domain
+│   │   ├── main.tf                    #   PKCE 必須、code grant only、refresh token 7 日 + ローテーション、初期管理者ユーザー
+│   │   ├── variables.tf
+│   │   └── outputs.tf
+│   │
+│   ├── lambda-edge/                   # Lambda@Edge（CloudFront viewer-request で JWT 検証）
+│   │   ├── main.tf                    #   us-east-1 alias、aws-jwt-verify による RS256 検証、archive_file で zip 化
+│   │   ├── auth/
+│   │   │   ├── index.js.tftpl         #   Cognito IDs を埋め込むテンプレート
+│   │   │   ├── package.json           #   aws-jwt-verify 依存
+│   │   │   └── package-lock.json
+│   │   ├── variables.tf
+│   │   └── outputs.tf                 #   qualified_arn (versioned)
+│   │
 │   ├── s3-vectors/                    # S3 Vectors ベクトル検索【Phase 3】
 │   │   ├── main.tf                    #   vector bucket、vector index（1024次元、cosine）
 │   │   ├── variables.tf
@@ -164,15 +183,18 @@ terraform/
 tests/
 ├── unit/                              # ユニットテスト
 │   ├── lambdas/
-│   │   ├── test_collector.py          #   collector 関数のテスト（10件）
-│   │   ├── test_scorer.py             #   scorer 関数のテスト（12件）
-│   │   ├── test_deliverer.py          #   deliverer 関数のテスト（9件）
-│   │   ├── test_feedback.py           #   feedback 関数のテスト（8件）【Phase 2】
-│   │   ├── test_weight_adjuster.py    #   weight_adjuster のテスト（11件）【Phase 2】
-│   │   └── conftest.py                #   共通フィクスチャ（環境変数、モック等）
+│   │   ├── test_collector.py          #   collector 関数のテスト
+│   │   ├── test_scorer.py             #   scorer 関数のテスト
+│   │   ├── test_deliverer.py          #   deliverer 関数のテスト
+│   │   ├── test_feedback.py           #   feedback 関数のテスト【Phase 2】
+│   │   ├── test_weight_adjuster.py    #   weight_adjuster のテスト【Phase 2】
+│   │   └── conftest.py                #   共通フィクスチャ（環境変数、モック、AWS_DEFAULT_REGION 等）
+│   ├── shared/
+│   │   ├── __init__.py
+│   │   └── test_pipeline_runs.py      #   upsert_run_status のテスト（moto + 8件: extra attrs、retry 成功時 error クリア、別ステージ error 保持等）
 │   └── summarizer/
-│       ├── html-generator.test.js     #   HTML 生成のテスト（39件）
-│       └── dashboard-generator.test.js #  ダッシュボード生成のテスト（27件）【Phase 3】
+│       ├── html-generator.test.js     #   HTML 生成のテスト
+│       └── dashboard-generator.test.js #  ダッシュボード生成のテスト【Phase 3】
 │
 └── fixtures/                          # テスト用固定データ
     ├── hf_daily_papers.json           #   HF Daily Papers レスポンス例
@@ -206,7 +228,14 @@ docs/
 ```
 static/
 ├── style.css                          # 共通スタイルシート（モバイルレスポンシブ対応）
-└── search.js                          # クライアントサイド検索（lunr.js + 日本語部分文字列検索）
+├── search.js                          # クライアントサイド検索（lunr.js + 日本語部分文字列検索）
+└── auth/                              # Cognito OAuth (PKCE) フロー用静的ページ
+    ├── login.html                     # PKCE code_verifier 生成、silent refresh、Hosted UI へ 302
+    ├── callback.html                  # code → tokens 交換、Cookie 設定後 dest にリダイレクト
+    ├── logout.html                    # Cookie 削除 + Cognito Logout エンドポイント
+    ├── login.js / callback.js / logout.js
+    ├── auth-helpers.js                # PKCE / Cookie / safeDest 共通ユーティリティ
+    └── config.js                      # COGNITO_DOMAIN / CLIENT_ID / CLOUDFRONT_DOMAIN 注入用 (deploy.yml が sed)
 ```
 
 ## 3. ファイル配置ルール
@@ -336,19 +365,28 @@ htmlcov/
 
 ## 6. Phase 別のディレクトリ有効範囲
 
-| ディレクトリ / ファイル | Phase 1 | Phase 2 | Phase 3 |
-|----------------------|---------|---------|---------|
-| `src/lambdas/collector/` | o | o | o |
-| `src/lambdas/scorer/` | o | o | o |
-| `src/lambdas/deliverer/` | o | o | o |
-| `src/lambdas/feedback/` | - | o | o |
-| `src/lambdas/weight_adjuster/` | - | o | o |
-| `src/summarizer/` | o | o | o |
-| `terraform/modules/api-gateway/` | - | o | o |
-| `terraform/modules/s3-vectors/` | - | - | o |
-| `terraform/modules/github-oidc/` | - | - | o |
-| `terraform/modules/codebuild/` | - | - | o |
-| `src/summarizer/src/embedding-client.js` | - | - | o |
-| `src/summarizer/src/vectors-client.js` | - | - | o |
-| `src/summarizer/src/dashboard-generator.js` | - | - | o |
-| `static/` | o | o | o |
+凡例: `o` = 該当 Phase で導入 / 利用 / `-` = 未導入
+
+| ディレクトリ / ファイル | P1 (収集〜配信) | P2 (FB学習) | P3 (Web ダッシュボード) | 認証 (2026-04-30) | 監視ダッシュボード (2026-04-30〜) |
+|----------------------|:--:|:--:|:--:|:--:|:--:|
+| `src/lambdas/collector/` | o | o | o | o | o |
+| `src/lambdas/scorer/` | o | o | o | o | o |
+| `src/lambdas/deliverer/` | o | o | o | o | o |
+| `src/lambdas/feedback/` | - | o | o | o | o |
+| `src/lambdas/weight_adjuster/` | - | o | o | o | o |
+| `src/lambdas/token_refresher/` | - | - | o | o | o |
+| `src/summarizer/` | o | o | o | o | o |
+| `src/summarizer/src/embedding-client.js` | - | - | o | o | o |
+| `src/summarizer/src/vectors-client.js` | - | - | o | o | o |
+| `src/summarizer/src/dashboard-generator.js` | - | - | o | o | o |
+| `src/summarizer/src/pipeline-runs.js` | - | - | - | - | o |
+| `src/shared/pipeline_runs.py` | - | - | - | - | o |
+| `terraform/modules/api-gateway/` | - | o | o | o | o |
+| `terraform/modules/s3-vectors/` | - | - | o | o | o |
+| `terraform/modules/github-oidc/` | - | - | o | o | o |
+| `terraform/modules/codebuild/` | - | - | o | o | o |
+| `terraform/modules/cognito/` | - | - | - | o | o |
+| `terraform/modules/lambda-edge/` | - | - | - | o | o |
+| `static/auth/` | - | - | - | o | o |
+| `tests/unit/shared/` | - | - | - | - | o |
+| `static/` (それ以外) | o | o | o | o | o |

@@ -49,20 +49,26 @@ graph TB
     L1 -->|取得| AR
     L1 -->|取得| SS
     L1 -->|保存| DDB
+    L1 -->|telemetry upsert| DDB
     L1 -->|次ステップ起動| L2
     L2 -->|読取/保存| DDB
+    L2 -->|telemetry upsert| DDB
     L2 -->|次ステップ起動| ECS
     ECS -->|読取| DDB
     ECS -->|claude -p| ECS
     ECS -->|保存| DDB
     ECS -->|HTML生成・アップロード| S3
+    ECS -->|telemetry upsert| DDB
     ECS -->|次ステップ起動| L3
     L3 -->|読取| DDB
     L3 -->|読取| SM
+    L3 -->|telemetry upsert| DDB
     L3 -->|コンパクト要約+詳細リンク投稿| SL
     SL -->|詳細を見るリンク| CF
     CF -->|配信| S3
 ```
+
+> 「telemetry upsert」は各ステージの末尾で `pipeline_runs` テーブル（PK=date）の同一行に対して冪等に書き込む観測値（status / counts / tokens / cost / quality）。Phase 3 の監視ダッシュボードのデータソース。
 
 ### Phase 2 追加コンポーネント
 
@@ -379,6 +385,41 @@ score = w1 × normalize(hf_upvotes)
    - 合計は常に 1.0 に正規化
 ```
 
+**履歴の保存:**
+毎回の実行で `config` テーブルの `scoring_weights_history` キーに直近 12 件の `{date, w1, w2, w3, w4, skipped, feedback_count, papers_count}` を append（古いものから削除）。Phase 3 ダッシュボードの重み履歴チャートで時系列描画する。
+
+### 3.7 telemetry 収集（pipeline-runs upsert、監視ダッシュボード用）
+
+**責務:** 各パイプラインステージが自分の終了時に観測値を `pipeline_runs` テーブルへ冪等に upsert する。Phase 3 の監視ダッシュボードがこれを集計する。
+
+**共通ヘルパー:**
+- Python: `src/shared/pipeline_runs.py` の `upsert_run_status(date, lambda_name, status, error=None, **extra_attrs)`
+- Node.js: `src/summarizer/src/pipeline-runs.js` の `upsertRunStatus(date, lambdaName, status, {error, extra})`
+
+**ヘルパーの主要セマンティクス:**
+
+| 項目 | 動作 |
+|---|---|
+| 失敗握り潰し | `update_item` 失敗時は warning ログのみ。pipeline 本体は継続 |
+| 冪等性 | 自分の `<stage>_status` / `<stage>_finished_at` / `<stage>_error?` のみ更新。他ステージの値を破壊しない |
+| 予約語エスケープ | `date` / `status` / `error` / `ttl` 等は ExpressionAttributeNames で alias 化 |
+| stale error クリア | `error=None` で呼ばれた時は `<stage>_error` を `REMOVE` 句で削除（リトライ成功時に古いエラーが残らない） |
+| 数値型 | float → Decimal 自動変換（DynamoDB resource API 制約、Python のみ） |
+
+**各ステージが書き込む値:**
+
+| ステージ | extra_attrs |
+|---|---|
+| collector | `papers_collected_hf` / `papers_collected_arxiv` / `papers_collected_total` |
+| scorer | `papers_selected` / `weights_snapshot` |
+| summarizer | `papers_summarized` / `papers_attempted` / `claude_input_tokens` / `claude_output_tokens` / `claude_cache_read_tokens` / `claude_cache_create_tokens` / `claude_cost_usd` / `quality_results` |
+| deliverer | `papers_delivered` |
+| weight_adjuster | `weight_adjuster_last_run` / `weight_adjuster_skipped` / `weights_after` |
+| token_refresher | （extra なし、status のみ） |
+
+**Claude usage 抽出（summarizer のみ）:**
+`claude -p --output-format json` の出力 envelope (`parsed.usage.{input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens}` および `parsed.total_cost_usd`) から読み取る。フィールドが無い CLI バージョンに対しては 0 でフォールバック。
+
 ## 4. データモデル定義
 
 ### ER図
@@ -390,6 +431,7 @@ erDiagram
     PAPERS ||--o{ PAPER_SOURCES : "collected_from"
     DELIVERY_LOG ||--o{ DELIVERY_ITEMS : "contains"
     CONFIG ||--|| CONFIG : "singleton"
+    PIPELINE_RUNS ||--|| PIPELINE_RUNS : "1 row per date"
 
     PAPERS {
         string arxiv_id PK "arXiv ID (例: 2603.18718)"
@@ -419,8 +461,8 @@ erDiagram
         string detail_results "詳細:結果"
         string detail_practicality "詳細:実装可能性"
         string[] tags "分野タグ"
-        string source "生成元 (claude/hf_ai_summary)"
-        float quality_score "品質スコア"
+        string quality_winner "claude/hf (LLM-as-judge 結果)"
+        float quality_score "品質スコア (1-10)"
         boolean is_active "採用中フラグ"
         string detail_page_url "S3詳細ページURL"
         string created_at "生成日時(ISO8601)"
@@ -460,9 +502,37 @@ erDiagram
     }
 
     CONFIG {
-        string key PK "設定キー"
+        string key PK "設定キー (scoring_weights / scoring_weights_history)"
         string value "設定値(JSON)"
         string updated_at "更新日時"
+    }
+
+    PIPELINE_RUNS {
+        string date PK "YYYY-MM-DD"
+        string collector_status "success/error/running"
+        string collector_finished_at "ISO8601"
+        int papers_collected_hf "HF 取得件数"
+        int papers_collected_arxiv "arXiv 取得件数"
+        int papers_collected_total "DynamoDB に保存できた件数"
+        string scorer_status
+        int papers_selected "上位 N 選定件数"
+        map weights_snapshot "実行時の {w1,w2,w3,w4}"
+        string summarizer_status
+        int papers_summarized "成功した論文数"
+        int papers_attempted "試行した論文数"
+        int claude_input_tokens
+        int claude_output_tokens
+        int claude_cache_read_tokens
+        int claude_cache_create_tokens
+        float claude_cost_usd
+        list quality_results "[{arxiv_id, winner, score}]"
+        string deliverer_status
+        int papers_delivered
+        string weight_adjuster_last_run "YYYY-MM-DD"
+        boolean weight_adjuster_skipped "ウェイト変更なし"
+        map weights_after "更新後 {w1,w2,w3,w4}"
+        string token_refresher_status "success/skipped/error"
+        int ttl "epoch 秒、90日後に自動削除"
     }
 ```
 
@@ -528,7 +598,7 @@ erDiagram
 #### config テーブル
 | 属性 | キー | 型 | 説明 |
 |------|------|-----|------|
-| key | PK | S | 設定キー（例: scoring_weights） |
+| key | PK | S | 設定キー（`scoring_weights` / `scoring_weights_history`） |
 | value | - | S | JSON文字列 |
 | updated_at | - | S | 更新日時 |
 
@@ -540,6 +610,35 @@ erDiagram
   "updated_at": "2026-03-27T00:00:00Z"
 }
 ```
+
+**`scoring_weights_history` (weight_adjuster が毎週 append):**
+```json
+{
+  "key": "scoring_weights_history",
+  "value": "[{\"date\":\"2026-04-26\",\"w1\":0.30,\"w2\":0.21,\"w3\":0.19,\"w4\":0.30,\"skipped\":false,\"feedback_count\":42,\"papers_count\":680}, ...]",
+  "updated_at": "2026-04-26T20:00:00Z"
+}
+```
+直近 12 件まで保持（古いものから削除）。Phase 3 のダッシュボード「重み履歴チャート」のデータソース。
+
+#### pipeline_runs テーブル（監視ダッシュボード用）
+| 属性 | キー | 型 | 説明 |
+|------|------|-----|------|
+| date | PK | S | YYYY-MM-DD（1 日 1 行） |
+| `<stage>_status` | - | S | `success` / `error` / `running` / `skipped` |
+| `<stage>_finished_at` | - | S | ISO8601 |
+| `<stage>_error` | - | S | エラーメッセージ（500 文字切詰）。成功リトライ時は REMOVE で削除 |
+| papers_collected_hf / _arxiv / _total | - | N | collector |
+| papers_selected / weights_snapshot | - | N / M | scorer |
+| papers_summarized / papers_attempted | - | N | summarizer |
+| claude_input_tokens / claude_output_tokens / claude_cache_*_tokens | - | N | summarizer |
+| claude_cost_usd | - | N | summarizer (Decimal) |
+| quality_results | - | L | `[{arxiv_id, winner, score}]` |
+| papers_delivered | - | N | deliverer |
+| weight_adjuster_last_run / weight_adjuster_skipped / weights_after | - | S / BOOL / M | weight_adjuster |
+| ttl | - | N | epoch 秒、90 日後に DynamoDB が自動削除 |
+
+**書き込み戦略:** 各ステージ末尾で **冪等な `update_item`** により自分の prefix 属性のみ upsert。ステージごとの故障で他ステージの観測値を破壊しない。telemetry 書き込みの失敗自体はパイプラインを止めない（try/except で握り潰し）。
 
 ## 5. ステップ間連携設計
 
@@ -751,3 +850,83 @@ graph TD
 → DLQ にメッセージが入った場合、CloudWatch Alarm → SNS → メール通知
 → 手動確認後にリドライブ
 ```
+
+## 9. サイト認証 (Cognito + Lambda@Edge)
+
+S3 + CloudFront の詳細ページ群（`/papers/*`, `/digest/*`, `/tags/*`, `/search.html`, `/dashboard.html` 等）に対し、**Cognito User Pool（OAuth 2.1 + PKCE Hosted UI）**でログインを要求し、**Lambda@Edge** が CloudFront viewer-request イベントで id_token (RS256) を検証する。詳細仕様は `architecture.md §13` 参照。
+
+### 認証バイパス仕様
+
+Lambda@Edge は以下のパスを **常に通す**（未認証アクセス可能）:
+
+| パス | 理由 |
+|---|---|
+| `/auth/login.html`, `/auth/callback.html`, `/auth/logout.html` | OAuth フロー必須エンドポイント |
+| `/auth/login.js`, `/auth/callback.js`, `/auth/logout.js`, `/auth/auth-helpers.js`, `/auth/config.js` | 上記 HTML が読み込む JS 群 |
+| `/favicon.ico`, `/robots.txt` | 標準 well-known パス |
+| `/assets/*` | 共通スタイル・スクリプト（公開しても問題ない静的資産） |
+
+### 認証フロー（シーケンス）
+
+```mermaid
+sequenceDiagram
+    participant U as ブラウザ
+    participant CF as CloudFront
+    participant E as Lambda@Edge
+    participant C as Cognito Hosted UI
+    participant S as S3
+
+    U->>CF: GET /papers/2604.xxx.html
+    CF->>E: viewer-request
+    E-->>U: 302 /auth/login.html?dest=/papers/2604.xxx.html
+    U->>CF: GET /auth/login.html (BYPASS)
+    CF->>S: 静的取得
+    U->>U: PKCE code_verifier 生成 + sessionStorage
+    U->>C: 302 /oauth2/authorize?code_challenge=...
+    C-->>U: ログイン画面
+    U->>C: email + password
+    C-->>U: 302 /auth/callback.html?code=...
+    U->>C: POST /oauth2/token (code + verifier)
+    C-->>U: id_token / refresh_token
+    U->>U: Cookie に保存 (Secure / SameSite=Lax)
+    U->>CF: GET /papers/2604.xxx.html (Cookie: id_token)
+    CF->>E: viewer-request
+    E->>E: aws-jwt-verify で RS256 検証 → OK
+    E->>S: forward
+    S-->>U: 詳細ページ
+```
+
+### サイレントリフレッシュ
+
+id_token の有効期限（60 min）切れ後、`/auth/login.html` が `refresh_token` Cookie の有無を確認し、あれば Cognito Hosted UI を経由せずに新しい id_token を取得して dest にリダイレクトする。
+
+## 10. 監視ダッシュボード（Phase 3 で実装予定）
+
+### 概要
+
+`pipeline_runs` テーブル（§4）に蓄積された 1 日 1 行のラン記録を時系列集計し、`/dashboard.html` に可視化する。Phase 2 で**データ収集基盤までは本番稼働済み**。Phase 3 でテンプレートと集計ロジック、Chart.js 描画を追加する。
+
+### データソース
+
+| テーブル | 用途 |
+|---|---|
+| `pipeline_runs` | ステージ別 status / 件数 / トークン / コスト（30 日間 scan） |
+| `papers` | スコア内訳・多様性メトリクスの計算（top 7 の HF/arXiv 比率、カテゴリ分布、著者重複率） |
+| `summaries` | quality_winner / quality_score の集計 |
+| `feedback` | カテゴリ別 Like 率の時系列 |
+| `config.scoring_weights_history` | 重み (w1〜w4) の時系列線グラフ |
+
+### 描画予定チャート（Phase 3〜4）
+
+| ID | チャート | データソース |
+|---|---|---|
+| FR1 | 日次収集件数（HF / arXiv 内訳） | pipeline_runs.papers_collected_* |
+| FR2 | 最新スコア内訳（top 7） | papers + weights_snapshot |
+| FR3 | カテゴリ別 Like 率推移 | feedback |
+| FR4 | スコアリング重み履歴 | config.scoring_weights_history |
+| FR5 | サマリーカード（コスト合計、トークン合計、選定率、品質勝率） | pipeline_runs |
+| FR6 | パイプラインヘルス（ステージ別 status 履歴） | pipeline_runs |
+| FR7 | コスト推移 | pipeline_runs.claude_cost_usd |
+| FR8 | 学習ループ稼働状況（重み変化量、skip カウント） | weight_adjuster_skipped + history |
+| FR9 | 多様性メトリクス（HF/arXiv 内訳、カテゴリ分布、著者重複率） | papers |
+| FR10 | 要約品質スコア（claude/hf 勝率、平均スコア推移） | summaries.quality_winner / quality_score |

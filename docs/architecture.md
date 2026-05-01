@@ -28,6 +28,8 @@
 | **SQS** | Dead Letter Queue（Lambda DLQ） | 1 | 標準キュー、SSE-SQS 暗号化有効 |
 | **API Gateway** | Slack Events API のエンドポイント | 2 | HTTP API（v2） |
 | **S3 Vectors** | ベクトル検索（セマンティック検索） | 3 | vector bucket + vector index、ゼロスケール、従量課金 |
+| **Cognito** | サイト認証（OAuth 2.1 + PKCE Hosted UI） | 認証 (2026-04-30〜) | User Pool 1個、admin 作成型、refresh token 7日 + ローテーション |
+| **Lambda@Edge** | CloudFront viewer-request での JWT (RS256) 検証 | 認証 (2026-04-30〜) | us-east-1 リージョン必須、Node.js 20、`aws-jwt-verify` 同梱、バージョン公開必須 |
 
 ### 外部サービス
 
@@ -46,6 +48,7 @@
 | 項目 | 値 |
 |------|-----|
 | AWS リージョン | ap-northeast-1（東京） |
+| Lambda@Edge リージョン | us-east-1（バージニア北部） — Lambda@Edge 制約により必須 |
 | 環境 | 単一環境（prod） ※ 小規模のため dev/staging は設けない |
 
 ### ネットワーク構成
@@ -197,7 +200,7 @@ s3://ai-papers-digest-pages-{account_id}/
 | メモリ | 256 MB |
 | タイムアウト | 300 秒（5分） |
 | トリガー | EventBridge スケジュール（JST 6:00） |
-| 環境変数 | `PAPERS_TABLE`, `SCORER_FUNCTION_NAME`, `S2_API_KEY_SECRET_ARN`, `TARGET_CATEGORIES` |
+| 環境変数 | `PAPERS_TABLE`, `PAPER_SOURCES_TABLE`, `SCORER_FUNCTION_NAME`, `S2_API_KEY_SECRET_ARN`, `TARGET_CATEGORIES`, `PIPELINE_RUNS_TABLE` |
 | 日付処理 | 内部管理日付はJST、HF APIクエリはUTC（2日分取得+dedup）。明示的date指定でバックフィル対応 |
 | DLQ | SQS `ai-papers-digest-collector-dlq` |
 | 同時実行数 | 1（日次バッチなので並行不要） |
@@ -215,7 +218,7 @@ s3://ai-papers-digest-pages-{account_id}/
 | メモリ | 256 MB |
 | タイムアウト | 120 秒（2分） |
 | トリガー | collector Lambda からの非同期呼び出し |
-| 環境変数 | `PAPERS_TABLE`, `DELIVERY_LOG_TABLE`, `CONFIG_TABLE`, `ECS_CLUSTER`, `ECS_TASK_DEFINITION`, `ECS_SUBNETS`, `ECS_SECURITY_GROUP`, `TOP_N` |
+| 環境変数 | `PAPERS_TABLE`, `DELIVERY_LOG_TABLE`, `CONFIG_TABLE`, `FEEDBACK_TABLE`, `ECS_CLUSTER`, `ECS_TASK_DEFINITION`, `ECS_SUBNETS`, `ECS_SECURITY_GROUP`, `TOP_N`, `PIPELINE_RUNS_TABLE` |
 | DLQ | SQS `ai-papers-digest-scorer-dlq` |
 
 #### deliverer（Slack 配信）
@@ -226,7 +229,7 @@ s3://ai-papers-digest-pages-{account_id}/
 | メモリ | 128 MB |
 | タイムアウト | 120 秒（2分） |
 | トリガー | EventBridge ルール（ECS Task State Change: STOPPED） |
-| 環境変数 | `SUMMARIES_TABLE`, `DELIVERY_LOG_TABLE`, `SLACK_BOT_TOKEN_SECRET_ARN`, `SLACK_CHANNEL_ID`, `DETAIL_PAGE_BASE_URL` |
+| 環境変数 | `SUMMARIES_TABLE`, `DELIVERY_LOG_TABLE`, `PAPERS_TABLE`, `SLACK_BOT_TOKEN_SECRET_ARN`, `SLACK_CHANNEL_ID`, `DETAIL_PAGE_BASE_URL`, `PIPELINE_RUNS_TABLE` |
 | DLQ | SQS `ai-papers-digest-deliverer-dlq` |
 
 #### feedback-collector（フィードバック収集）【Phase 2】
@@ -257,7 +260,34 @@ s3://ai-papers-digest-pages-{account_id}/
 | メモリ | 256 MB |
 | タイムアウト | 120 秒（2分） |
 | トリガー | EventBridge スケジュール（週次、月曜 JST 5:00） |
-| 環境変数 | `FEEDBACK_TABLE`, `PAPERS_TABLE`, `CONFIG_TABLE` |
+| 環境変数 | `FEEDBACK_TABLE`, `PAPERS_TABLE`, `CONFIG_TABLE`, `PIPELINE_RUNS_TABLE` |
+| 副次出力 | `config` テーブルの `scoring_weights_history` キーに直近 12 件の重みスナップショット (date / w1-w4 / skipped / feedback_count / papers_count) を append |
+
+#### token-refresher（Claude OAuth トークン自動リフレッシュ）
+
+| 設定 | 値 |
+|------|-----|
+| 関数名 | `ai-papers-digest-token-refresher` |
+| メモリ | 128 MB |
+| タイムアウト | 30 秒 |
+| トリガー | EventBridge スケジュール（短間隔ポーリング） |
+| 環境変数 | `CLAUDE_SECRET_ID`, `PIPELINE_RUNS_TABLE` |
+| 動作 | Secrets Manager 上の Claude credentials を期限 5 分前にリフレッシュ。期限内ならスキップ |
+
+#### auth-edge（Lambda@Edge による JWT 検証、認証機能）
+
+| 設定 | 値 |
+|------|-----|
+| 関数名 | `ai-papers-digest-auth-edge` |
+| リージョン | us-east-1（Lambda@Edge 制約） |
+| ランタイム | Node.js 20 |
+| メモリ | 128 MB |
+| タイムアウト | 5 秒（viewer-request の上限） |
+| 関連付け | CloudFront Distribution の default_cache_behavior `viewer-request` に `qualified_arn`（バージョン付き）を関連付け |
+| 環境変数 | **使用不可**（Lambda@Edge 制約）。USER_POOL_ID / CLIENT_ID / REGION は `index.js.tftpl` でビルド時に埋め込み |
+| 依存 | `aws-jwt-verify`（公式 RS256 検証ライブラリ）。JWKS は初回呼び出しで自動取得 + コンテナ内キャッシュ |
+| バイパス | `BYPASS_PATHS` (`/favicon.ico`, `/robots.txt`) と `AUTH_ALLOWED_FILES`（`/auth/*.html` `/auth/*.js`）+ `/assets/*` |
+| 切り戻し | `enable_auth=false` で `terraform apply` → `lambda_function_association` 解除（数分） |
 
 ## 4. コンテナイメージ仕様（Fargate summarizer）
 
@@ -468,8 +498,9 @@ terraform {
 ai-papers-digest-collector-role
 ├── AWSLambdaBasicExecutionRole（マネージドポリシー）
 ├── カスタムポリシー:
-│   ├── dynamodb:PutItem, UpdateItem, GetItem  → papers テーブル
+│   ├── dynamodb:PutItem, UpdateItem, GetItem  → papers, paper_sources テーブル
 │   ├── dynamodb:Query                         → papers テーブル（score-index）
+│   ├── dynamodb:UpdateItem, PutItem           → pipeline_runs テーブル（telemetry upsert）
 │   ├── lambda:InvokeFunction                  → scorer Lambda
 │   ├── secretsmanager:GetSecretValue          → S2 API キー
 │   └── xray:PutTraceSegments, PutTelemetryRecords
@@ -481,7 +512,8 @@ ai-papers-digest-collector-role
 ai-papers-digest-scorer-role
 ├── AWSLambdaBasicExecutionRole
 ├── カスタムポリシー:
-│   ├── dynamodb:Query, GetItem, UpdateItem    → papers, delivery_log, config テーブル
+│   ├── dynamodb:Query, GetItem, UpdateItem, Scan → papers, delivery_log, config, feedback テーブル
+│   ├── dynamodb:UpdateItem, PutItem           → pipeline_runs テーブル（telemetry upsert）
 │   ├── ecs:RunTask                            → summarizer タスク定義
 │   ├── iam:PassRole                           → Fargate タスクロール, タスク実行ロール
 │   └── xray:PutTraceSegments, PutTelemetryRecords
@@ -493,9 +525,42 @@ ai-papers-digest-scorer-role
 ai-papers-digest-deliverer-role
 ├── AWSLambdaBasicExecutionRole
 ├── カスタムポリシー:
-│   ├── dynamodb:Query, GetItem, PutItem       → summaries, delivery_log テーブル
-│   ├── secretsmanager:GetSecretValue          → Slack Webhook URL
+│   ├── dynamodb:Query, GetItem, PutItem, UpdateItem, Scan → summaries, delivery_log テーブル
+│   ├── dynamodb:BatchGetItem, GetItem         → papers テーブル（hf_upvotes 取得用）
+│   ├── dynamodb:UpdateItem, PutItem           → pipeline_runs テーブル（telemetry upsert）
+│   ├── secretsmanager:GetSecretValue          → Slack Bot Token
 │   └── xray:PutTraceSegments, PutTelemetryRecords
+```
+
+#### weight-adjuster Lambda【Phase 2】
+
+```
+ai-papers-digest-weight-adjuster-role
+├── AWSLambdaBasicExecutionRole
+├── カスタムポリシー:
+│   ├── dynamodb:Scan, Query                   → feedback, papers テーブル
+│   ├── dynamodb:GetItem, PutItem              → config テーブル (scoring_weights, scoring_weights_history)
+│   ├── dynamodb:UpdateItem, PutItem           → pipeline_runs テーブル
+│   └── xray:PutTraceSegments, PutTelemetryRecords
+```
+
+#### token-refresher Lambda
+
+```
+ai-papers-digest-token-refresher-role
+├── AWSLambdaBasicExecutionRole
+├── カスタムポリシー:
+│   ├── secretsmanager:GetSecretValue, PutSecretValue → Claude credentials
+│   └── dynamodb:UpdateItem, PutItem           → pipeline_runs テーブル
+```
+
+#### auth-edge Lambda@Edge（認証）
+
+```
+ai-papers-digest-auth-edge-role  (us-east-1)
+├── Trust policy: lambda.amazonaws.com + edgelambda.amazonaws.com
+├── マネージドポリシー: AWSLambdaBasicExecutionRole（CloudWatch Logs 出力用）
+└── 追加ポリシーなし（JWKS 取得は外部 HTTP のみで完結、AWS API は呼ばない）
 ```
 
 ### Fargate タスクロール
@@ -503,8 +568,10 @@ ai-papers-digest-deliverer-role
 ```
 ai-papers-digest-summarizer-task-role
 ├── カスタムポリシー:
-│   ├── dynamodb:GetItem, Query, Scan, PutItem, UpdateItem, BatchGetItem, BatchWriteItem → papers, summaries テーブル
-│   ├── s3:PutObject                           → 詳細ページバケット（papers/*, digest/*）
+│   ├── dynamodb:GetItem, Query, Scan, PutItem, UpdateItem, BatchGetItem, BatchWriteItem
+│   │   → papers, summaries, pipeline_runs, config テーブル
+│   │   (config は scoring_weights_history を読む Phase 3 ダッシュボード用に前倒し付与)
+│   ├── s3:PutObject                           → 詳細ページバケット（papers/*, digest/*, dashboard.html）
 │   ├── secretsmanager:GetSecretValue          → Claude 認証トークン（起動時取得）
 │   ├── secretsmanager:PutSecretValue          → Claude 認証トークン（リフレッシュ後の書き戻し）
 │   ├── s3vectors:PutVectors, GetVectors, QueryVectors, DeleteVectors, ListVectors → S3 Vectors
@@ -668,6 +735,7 @@ graph LR
 | delivery_log | ~10 items | ~20 reads | オンデマンド |
 | feedback | ~50 items（Phase 2） | ~100 reads | オンデマンド |
 | config | ~1 item/週 | ~10 reads | オンデマンド |
+| pipeline_runs | ~5 upserts/日 (各ステージから) | ~30 reads (ダッシュボード生成) | オンデマンド + TTL 90日 |
 
 → いずれも低トラフィック。オンデマンドで $1/月以下。
 
@@ -681,6 +749,7 @@ graph LR
 | delivery_log | 有効 | セキュリティスキャン指摘（AWS-0024）に基づき全テーブル有効化 |
 | paper_sources | 有効 | セキュリティスキャン指摘（AWS-0024）に基づき全テーブル有効化 |
 | config | 有効 | セキュリティスキャン指摘（AWS-0024）に基づき全テーブル有効化 |
+| pipeline_runs | 有効 | TTL 90 日と併用。古いランの観測値は自動破棄するが、保持期間内のリカバリは可能 |
 
 → PITR 有効テーブルの追加コスト: ~$0.20/GB/月（低容量のため無視可能）
 
@@ -723,3 +792,139 @@ graph LR
 - Slack Signing Secret → `ai-papers-digest/slack-signing-secret`
 
 Lambda / Fargate には Secrets Manager の **ARN のみ** を環境変数で渡し、ランタイムで値を取得する設計。`terraform.tfvars` は `.gitignore` 対象。
+
+## 13. サイト認証 (Cognito + Lambda@Edge)
+
+### 設計方針
+
+S3 + CloudFront でホスティングされる詳細ページ群（`/papers/*`, `/digest/*`, `/tags/*`, `/search.html` 等）に対し、**Cognito User Pool + Hosted UI（OAuth 2.1 + PKCE）+ Lambda@Edge による id_token (RS256) 検証**で認証をかける。
+
+**重要な設計判断**: CloudFront Function は **HMAC のみサポートで RS256 検証ができない**。Cognito の id_token は RS256 署名のため、CloudFront Function ではなく **Lambda@Edge** が必須。
+
+### Cognito User Pool
+
+| 項目 | 値 |
+|---|---|
+| Pool 名 | `ai-papers-digest-users` |
+| Sign-in 属性 | email |
+| Sign-up | 無効化（管理者 (`aws_cognito_user`) 経由のみ） |
+| パスワードポリシー | 12 文字以上 / 英大小数字記号必須 |
+| MFA | OFF（後で OPTIONAL に切り替え可） |
+| Email verification | 有効 |
+| App Client | client secret なし（PKCE で代替） / Allowed flows: code only / scopes: `openid email` |
+| Token validity | id: 60min / access: 60min / refresh: 7 day |
+| Refresh token rotation | 有効 |
+| Callback URL | `https://{cloudfront_domain}/auth/callback.html` |
+| Logout URL | `https://{cloudfront_domain}/auth/logout.html` |
+| Hosted UI Domain | `{prefix}.auth.ap-northeast-1.amazoncognito.com`（prefix は account_id ベース） |
+
+### Lambda@Edge: `auth-edge`
+
+`§3.関数一覧 - auth-edge` 参照。`aws-jwt-verify` ライブラリで Cognito JWKS から公開鍵を初回取得 + コンテナキャッシュ。
+
+### 認証フロー
+
+```mermaid
+sequenceDiagram
+    participant User as ブラウザ
+    participant CF as CloudFront
+    participant Edge as Lambda@Edge
+    participant Cognito as Cognito Hosted UI
+    participant S3 as S3 (静的)
+
+    User->>CF: GET /papers/2604.xxx.html
+    CF->>Edge: viewer-request (Cookie: id_token=?)
+    Edge->>Edge: id_token なし → 302
+    Edge-->>User: 302 /auth/login.html?dest=/papers/2604.xxx.html
+
+    User->>CF: GET /auth/login.html (BYPASS_PATHS)
+    CF->>S3: 静的取得
+    S3-->>User: login.html
+
+    User->>User: PKCE code_verifier 生成、sessionStorage に保存
+    User->>Cognito: 302 /oauth2/authorize?... code_challenge=...
+    Cognito-->>User: ログイン画面
+    User->>Cognito: email + password
+    Cognito-->>User: 302 /auth/callback.html?code=...
+
+    User->>CF: GET /auth/callback.html (BYPASS)
+    User->>Cognito: POST /oauth2/token (code + code_verifier)
+    Cognito-->>User: id_token / refresh_token
+    User->>User: Cookie に保存 (Secure / SameSite=Lax)
+    User->>CF: GET /papers/2604.xxx.html (Cookie: id_token)
+    CF->>Edge: viewer-request
+    Edge->>Edge: aws-jwt-verify で RS256 検証 → OK
+    Edge->>S3: forward
+    S3-->>User: 詳細ページ
+```
+
+### 切り戻し設計
+
+| 状態 | 操作 | 反映時間 |
+|---|---|---|
+| 認証 ON | `enable_auth=true` で `terraform apply` | 数分 |
+| 認証 OFF | `enable_auth=false` で `terraform apply` → `lambda_function_association` 解除 | **数分** で公開状態に戻る |
+| Lambda 完全削除 | Lambda@Edge は CloudFront から関連付けが完全に消えるまで数時間〜数日かかる（運用上の機能切り戻しとは別問題） |
+
+## 14. 監視ダッシュボードのデータ収集 (pipeline-runs)
+
+### 目的
+
+各パイプラインステージの観測値（実行状態、件数、トークン使用量、品質判定など）を 1 つの DynamoDB テーブルに集約し、Phase 3 で生成するダッシュボードのデータソースとする。
+
+### `pipeline-runs` テーブル
+
+| 設定 | 値 |
+|---|---|
+| 名前 | `ai-papers-digest-pipeline-runs` |
+| キー | PK=`date` (S, YYYY-MM-DD)、ソートキーなし |
+| 課金 | PAY_PER_REQUEST |
+| TTL | `ttl` 属性（epoch 秒）、90 日後に自動削除 |
+| PITR | 有効 |
+
+主要な属性（1 行 = 1 日分のラン）:
+- 各ステージ共通: `<stage>_status` / `<stage>_finished_at` / `<stage>_error?`
+- collector: `papers_collected_hf` / `papers_collected_arxiv` / `papers_collected_total`
+- scorer: `papers_selected` / `weights_snapshot` (M)
+- summarizer: `papers_summarized` / `papers_attempted` / `claude_input_tokens` / `claude_output_tokens` / `claude_cache_read_tokens` / `claude_cache_create_tokens` / `claude_cost_usd` / `quality_results` (L of `{arxiv_id, winner, score}`)
+- deliverer: `papers_delivered`
+- weight_adjuster: `weight_adjuster_last_run` / `weight_adjuster_skipped` / `weights_after`
+- token_refresher: status のみ
+- 共通: `ttl`
+
+### 共通ヘルパー
+
+| 場所 | 言語 | 用途 |
+|---|---|---|
+| `src/shared/pipeline_runs.py` | Python | Lambda 用。各 Lambda zip に flat 同梱（deploy.yml が `src/shared/*.py` をコピー） |
+| `src/summarizer/src/pipeline-runs.js` | Node.js | Fargate summarizer 用 |
+
+両ヘルパーは同じセマンティクスを持つ:
+
+1. **失敗握り潰し** — telemetry 書き込みが失敗してもパイプライン本体は止めない（try/except + warning ログ）
+2. **DynamoDB 予約語エスケープ** — `ttl` `date` `status` `error` 等は ExpressionAttributeNames で alias 化
+3. **float → Decimal 変換** — DynamoDB resource API は float を受け付けないため自動変換（Python 側）
+4. **stale error クリア** — `error=None` で呼ばれた場合、`<stage>_error` を `REMOVE` 句で削除（リトライ成功時に古いエラー文字列が残らない）
+
+### `config.scoring_weights_history`
+
+`weight_adjuster` Lambda が毎週末 (月曜 JST 5:00 = UTC 20:00 SUN) に append。
+
+```json
+{
+  "key": "scoring_weights_history",
+  "value": "[{\"date\":\"2026-04-26\",\"w1\":0.30,\"w2\":0.21,\"w3\":0.19,\"w4\":0.30,\"skipped\":false,\"feedback_count\":42,\"papers_count\":680}, ...]"
+}
+```
+
+直近 12 件まで保持（古いものから削除）。Phase 3 ダッシュボードの「重み履歴チャート」のデータソース。
+
+### `summaries` テーブルの拡張属性
+
+DynamoDB スキーマレスのため Terraform 変更なし。新規属性:
+
+| 属性 | 型 | 説明 |
+|---|---|---|
+| `quality_winner` | S | `claude` / `hf` — LLM-as-judge による勝者 |
+| `quality_score` | N | 1-10 の整数。勝者の品質スコア |
+
