@@ -362,6 +362,14 @@ resource "aws_ecs_task_definition" "summarizer" {
           name  = "PIPELINE_RUNS_TABLE"
           value = var.pipeline_runs_table_name
         },
+        {
+          name  = "CONFIG_TABLE"
+          value = var.config_table_name
+        },
+        {
+          name  = "FEEDBACK_TABLE"
+          value = var.feedback_table_name
+        },
       ]
 
       secrets = [

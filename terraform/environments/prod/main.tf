@@ -123,6 +123,8 @@ module "ecs" {
   papers_table_name        = module.dynamodb.papers_table_name
   summaries_table_name     = module.dynamodb.summaries_table_name
   pipeline_runs_table_name = module.dynamodb.pipeline_runs_table_name
+  config_table_name        = module.dynamodb.config_table_name
+  feedback_table_name      = module.dynamodb.feedback_table_name
   detail_page_base_url     = module.s3_cloudfront.detail_page_base_url
   secrets_manager_arn      = aws_secretsmanager_secret.claude_auth_token.arn
   dynamodb_table_arns = [
@@ -130,6 +132,8 @@ module "ecs" {
     module.dynamodb.summaries_table_arn,
     module.dynamodb.pipeline_runs_table_arn,
     module.dynamodb.config_table_arn,
+    module.dynamodb.feedback_table_arn,
+    "${module.dynamodb.feedback_table_arn}/index/*",
   ]
   s3_bucket_arn      = module.s3_cloudfront.bucket_arn
   s3_bucket_name     = module.s3_cloudfront.bucket_name

@@ -22,6 +22,16 @@ variable "pipeline_runs_table_name" {
   type        = string
 }
 
+variable "config_table_name" {
+  description = "DynamoDB config table name (scoring_weights_history などダッシュボード参照)"
+  type        = string
+}
+
+variable "feedback_table_name" {
+  description = "DynamoDB feedback table name (フィードバック集計のダッシュボード参照)"
+  type        = string
+}
+
 variable "detail_page_base_url" {
   description = "Base URL for the detail page"
   type        = string
