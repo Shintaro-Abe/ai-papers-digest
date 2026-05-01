@@ -31,6 +31,11 @@ output "config_table_name" {
   value       = aws_dynamodb_table.config.name
 }
 
+output "pipeline_runs_table_name" {
+  description = "Name of the pipeline_runs DynamoDB table"
+  value       = aws_dynamodb_table.pipeline_runs.name
+}
+
 ################################################################################
 # Table ARNs
 ################################################################################
@@ -62,4 +67,9 @@ output "feedback_table_arn" {
 output "config_table_arn" {
   description = "ARN of the config DynamoDB table"
   value       = aws_dynamodb_table.config.arn
+}
+
+output "pipeline_runs_table_arn" {
+  description = "ARN of the pipeline_runs DynamoDB table"
+  value       = aws_dynamodb_table.pipeline_runs.arn
 }

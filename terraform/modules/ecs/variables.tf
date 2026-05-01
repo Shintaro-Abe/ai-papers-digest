@@ -17,6 +17,11 @@ variable "summaries_table_name" {
   type        = string
 }
 
+variable "pipeline_runs_table_name" {
+  description = "DynamoDB pipeline-runs table name (monitoring telemetry)"
+  type        = string
+}
+
 variable "detail_page_base_url" {
   description = "Base URL for the detail page"
   type        = string

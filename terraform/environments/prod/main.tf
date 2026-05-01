@@ -119,18 +119,24 @@ module "s3_cloudfront" {
 module "ecs" {
   source = "../../modules/ecs"
 
-  ecr_image_uri          = "${module.ecs.ecr_repository_url}:latest"
-  papers_table_name      = module.dynamodb.papers_table_name
-  summaries_table_name   = module.dynamodb.summaries_table_name
-  detail_page_base_url   = module.s3_cloudfront.detail_page_base_url
-  secrets_manager_arn    = aws_secretsmanager_secret.claude_auth_token.arn
-  dynamodb_table_arns    = [module.dynamodb.papers_table_arn, module.dynamodb.summaries_table_arn]
-  s3_bucket_arn          = module.s3_cloudfront.bucket_arn
-  s3_bucket_name         = module.s3_cloudfront.bucket_name
-  vector_bucket_name     = module.s3_vectors.vector_bucket_name
-  vector_bucket_arn      = module.s3_vectors.vector_bucket_arn
-  vector_index_arn       = module.s3_vectors.vector_index_arn
-  tags                   = var.tags
+  ecr_image_uri            = "${module.ecs.ecr_repository_url}:latest"
+  papers_table_name        = module.dynamodb.papers_table_name
+  summaries_table_name     = module.dynamodb.summaries_table_name
+  pipeline_runs_table_name = module.dynamodb.pipeline_runs_table_name
+  detail_page_base_url     = module.s3_cloudfront.detail_page_base_url
+  secrets_manager_arn      = aws_secretsmanager_secret.claude_auth_token.arn
+  dynamodb_table_arns = [
+    module.dynamodb.papers_table_arn,
+    module.dynamodb.summaries_table_arn,
+    module.dynamodb.pipeline_runs_table_arn,
+    module.dynamodb.config_table_arn,
+  ]
+  s3_bucket_arn      = module.s3_cloudfront.bucket_arn
+  s3_bucket_name     = module.s3_cloudfront.bucket_name
+  vector_bucket_name = module.s3_vectors.vector_bucket_name
+  vector_bucket_arn  = module.s3_vectors.vector_bucket_arn
+  vector_index_arn   = module.s3_vectors.vector_index_arn
+  tags               = var.tags
 }
 
 # --- S3 Vectors (Phase 3) ---
@@ -157,6 +163,7 @@ module "lambda_collector" {
     SCORER_FUNCTION_NAME  = "ai-papers-digest-scorer"
     S2_API_KEY_SECRET_ARN = aws_secretsmanager_secret.semantic_scholar_api_key.arn
     TARGET_CATEGORIES     = "cs.AI,cs.CL,cs.CV,cs.LG,stat.ML"
+    PIPELINE_RUNS_TABLE   = module.dynamodb.pipeline_runs_table_name
     LOG_LEVEL             = "INFO"
   }
 
@@ -181,6 +188,11 @@ module "lambda_collector" {
       actions   = ["secretsmanager:GetSecretValue"]
       resources = [aws_secretsmanager_secret.semantic_scholar_api_key.arn]
     },
+    {
+      effect    = "Allow"
+      actions   = ["dynamodb:UpdateItem", "dynamodb:PutItem"]
+      resources = [module.dynamodb.pipeline_runs_table_arn]
+    },
   ]
 
   reserved_concurrent_executions = 1
@@ -199,22 +211,23 @@ module "lambda_scorer" {
   source_code_hash = data.archive_file.lambda_placeholder.output_base64sha256
 
   environment_variables = {
-    PAPERS_TABLE          = module.dynamodb.papers_table_name
-    DELIVERY_LOG_TABLE    = module.dynamodb.delivery_log_table_name
-    CONFIG_TABLE          = module.dynamodb.config_table_name
-    ECS_CLUSTER           = module.ecs.cluster_name
-    ECS_TASK_DEFINITION   = module.ecs.task_definition_arn
-    ECS_SUBNETS           = join(",", module.ecs.subnet_ids)
-    ECS_SECURITY_GROUP    = module.ecs.security_group_id
-    FEEDBACK_TABLE        = module.dynamodb.feedback_table_name
-    TOP_N                 = "7"
-    LOG_LEVEL             = "INFO"
+    PAPERS_TABLE        = module.dynamodb.papers_table_name
+    DELIVERY_LOG_TABLE  = module.dynamodb.delivery_log_table_name
+    CONFIG_TABLE        = module.dynamodb.config_table_name
+    ECS_CLUSTER         = module.ecs.cluster_name
+    ECS_TASK_DEFINITION = module.ecs.task_definition_arn
+    ECS_SUBNETS         = join(",", module.ecs.subnet_ids)
+    ECS_SECURITY_GROUP  = module.ecs.security_group_id
+    FEEDBACK_TABLE      = module.dynamodb.feedback_table_name
+    PIPELINE_RUNS_TABLE = module.dynamodb.pipeline_runs_table_name
+    TOP_N               = "7"
+    LOG_LEVEL           = "INFO"
   }
 
   policy_statements = [
     {
-      effect    = "Allow"
-      actions   = ["dynamodb:Query", "dynamodb:GetItem", "dynamodb:UpdateItem", "dynamodb:Scan"]
+      effect  = "Allow"
+      actions = ["dynamodb:Query", "dynamodb:GetItem", "dynamodb:UpdateItem", "dynamodb:Scan"]
       resources = [
         module.dynamodb.papers_table_arn,
         "${module.dynamodb.papers_table_arn}/index/*",
@@ -232,6 +245,11 @@ module "lambda_scorer" {
       effect    = "Allow"
       actions   = ["iam:PassRole"]
       resources = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/ai-papers-digest-*"]
+    },
+    {
+      effect    = "Allow"
+      actions   = ["dynamodb:UpdateItem", "dynamodb:PutItem"]
+      resources = [module.dynamodb.pipeline_runs_table_arn]
     },
   ]
 
@@ -256,6 +274,7 @@ module "lambda_deliverer" {
     SLACK_BOT_TOKEN_SECRET_ARN = aws_secretsmanager_secret.slack_bot_token.arn
     SLACK_CHANNEL_ID           = "C0AQAJC41LG"
     DETAIL_PAGE_BASE_URL       = module.s3_cloudfront.detail_page_base_url
+    PIPELINE_RUNS_TABLE        = module.dynamodb.pipeline_runs_table_name
     LOG_LEVEL                  = "INFO"
   }
 
@@ -275,6 +294,11 @@ module "lambda_deliverer" {
       actions   = ["secretsmanager:GetSecretValue"]
       resources = [aws_secretsmanager_secret.slack_bot_token.arn]
     },
+    {
+      effect    = "Allow"
+      actions   = ["dynamodb:UpdateItem", "dynamodb:PutItem"]
+      resources = [module.dynamodb.pipeline_runs_table_arn]
+    },
   ]
 
   tags = var.tags
@@ -292,15 +316,21 @@ module "lambda_token_refresher" {
   source_code_hash = data.archive_file.lambda_placeholder.output_base64sha256
 
   environment_variables = {
-    CLAUDE_SECRET_ID = aws_secretsmanager_secret.claude_auth_token.arn
-    LOG_LEVEL        = "INFO"
+    CLAUDE_SECRET_ID    = aws_secretsmanager_secret.claude_auth_token.arn
+    PIPELINE_RUNS_TABLE = module.dynamodb.pipeline_runs_table_name
+    LOG_LEVEL           = "INFO"
   }
 
   policy_statements = [
     {
-      effect  = "Allow"
-      actions = ["secretsmanager:GetSecretValue", "secretsmanager:PutSecretValue"]
+      effect    = "Allow"
+      actions   = ["secretsmanager:GetSecretValue", "secretsmanager:PutSecretValue"]
       resources = [aws_secretsmanager_secret.claude_auth_token.arn]
+    },
+    {
+      effect    = "Allow"
+      actions   = ["dynamodb:UpdateItem", "dynamodb:PutItem"]
+      resources = [module.dynamodb.pipeline_runs_table_arn]
     },
   ]
 
@@ -312,15 +342,15 @@ module "lambda_token_refresher" {
 module "eventbridge" {
   source = "../../modules/eventbridge"
 
-  collector_lambda_arn  = module.lambda_collector.function_arn
-  collector_lambda_name = module.lambda_collector.function_name
-  deliverer_lambda_arn  = module.lambda_deliverer.function_arn
-  deliverer_lambda_name = module.lambda_deliverer.function_name
-  ecs_cluster_arn              = module.ecs.cluster_arn
-  token_refresher_lambda_arn   = module.lambda_token_refresher.function_arn
-  token_refresher_lambda_name  = module.lambda_token_refresher.function_name
-  schedule_enabled             = true
-  tags                         = var.tags
+  collector_lambda_arn        = module.lambda_collector.function_arn
+  collector_lambda_name       = module.lambda_collector.function_name
+  deliverer_lambda_arn        = module.lambda_deliverer.function_arn
+  deliverer_lambda_name       = module.lambda_deliverer.function_name
+  ecs_cluster_arn             = module.ecs.cluster_arn
+  token_refresher_lambda_arn  = module.lambda_token_refresher.function_arn
+  token_refresher_lambda_name = module.lambda_token_refresher.function_name
+  schedule_enabled            = true
+  tags                        = var.tags
 }
 
 # --- Monitoring ---
@@ -347,10 +377,10 @@ module "lambda_feedback" {
   source_code_hash = data.archive_file.lambda_placeholder.output_base64sha256
 
   environment_variables = {
-    FEEDBACK_TABLE             = module.dynamodb.feedback_table_name
-    DELIVERY_LOG_TABLE         = module.dynamodb.delivery_log_table_name
-    SLACK_SIGNING_SECRET_ARN   = aws_secretsmanager_secret.slack_signing_secret.arn
-    LOG_LEVEL                  = "INFO"
+    FEEDBACK_TABLE           = module.dynamodb.feedback_table_name
+    DELIVERY_LOG_TABLE       = module.dynamodb.delivery_log_table_name
+    SLACK_SIGNING_SECRET_ARN = aws_secretsmanager_secret.slack_signing_secret.arn
+    LOG_LEVEL                = "INFO"
   }
 
   policy_statements = [
@@ -386,16 +416,17 @@ module "lambda_weight_adjuster" {
   source_code_hash = data.archive_file.lambda_placeholder.output_base64sha256
 
   environment_variables = {
-    FEEDBACK_TABLE = module.dynamodb.feedback_table_name
-    PAPERS_TABLE   = module.dynamodb.papers_table_name
-    CONFIG_TABLE   = module.dynamodb.config_table_name
-    LOG_LEVEL      = "INFO"
+    FEEDBACK_TABLE      = module.dynamodb.feedback_table_name
+    PAPERS_TABLE        = module.dynamodb.papers_table_name
+    CONFIG_TABLE        = module.dynamodb.config_table_name
+    PIPELINE_RUNS_TABLE = module.dynamodb.pipeline_runs_table_name
+    LOG_LEVEL           = "INFO"
   }
 
   policy_statements = [
     {
-      effect    = "Allow"
-      actions   = ["dynamodb:Scan", "dynamodb:Query"]
+      effect  = "Allow"
+      actions = ["dynamodb:Scan", "dynamodb:Query"]
       resources = [
         module.dynamodb.feedback_table_arn,
         "${module.dynamodb.feedback_table_arn}/index/*",
@@ -406,6 +437,11 @@ module "lambda_weight_adjuster" {
       effect    = "Allow"
       actions   = ["dynamodb:GetItem", "dynamodb:PutItem"]
       resources = [module.dynamodb.config_table_arn]
+    },
+    {
+      effect    = "Allow"
+      actions   = ["dynamodb:UpdateItem", "dynamodb:PutItem"]
+      resources = [module.dynamodb.pipeline_runs_table_arn]
     },
   ]
 
@@ -571,9 +607,9 @@ module "github_oidc" {
         ]
       },
       {
-        Sid    = "CloudFrontInvalidation"
-        Effect = "Allow"
-        Action = ["cloudfront:CreateInvalidation"]
+        Sid      = "CloudFrontInvalidation"
+        Effect   = "Allow"
+        Action   = ["cloudfront:CreateInvalidation"]
         Resource = "*"
       },
       {

@@ -1,7 +1,7 @@
 'use strict';
 
 const { getPaper, putSummary, getSummariesByDate } = require('./dynamo-client');
-const { generateSummary } = require('./claude-client');
+const { generateSummary, emptyUsage, addUsage } = require('./claude-client');
 const { compare } = require('./quality-judge');
 const { renderDetail, renderDigest } = require('./html-generator');
 const { upload } = require('./s3-uploader');
@@ -11,6 +11,7 @@ const {
   generate: generateDashboard,
   regenerateAllPapersAndDigests,
 } = require('./dashboard-generator');
+const { upsertRunStatus } = require('./pipeline-runs');
 
 /**
  * Sleep for the given number of milliseconds.
@@ -46,6 +47,9 @@ async function main() {
 
   const processedSummaries = [];
   const embeddings = {}; // arxivId -> embedding
+  const totalUsage = emptyUsage();
+  const qualityResults = []; // { arxiv_id, winner, score }
+  const errors = [];
 
   // ===== Phase 1: 要約生成 + 埋め込み + ベクトル保存 =====
   for (let i = 0; i < paperIds.length; i++) {
@@ -62,19 +66,27 @@ async function main() {
 
       // 2. Generate summary with Claude
       console.log(`[summarizer] Generating summary for: ${paper.title}`);
-      const summary = generateSummary(paper);
+      const { summary, usage: summaryUsage } = generateSummary(paper);
+      addUsage(totalUsage, summaryUsage);
 
       // 3. Quality comparison if existing summary available
+      let qualityResult = null;
       if (paper.hf_ai_summary) {
         console.log(`[summarizer] Comparing with existing HF AI summary...`);
-        const result = compare(summary, paper.hf_ai_summary);
+        qualityResult = compare(summary, paper.hf_ai_summary);
+        addUsage(totalUsage, qualityResult.usage);
+        qualityResults.push({
+          arxiv_id: arxivId,
+          winner: qualityResult.winner,
+          score: qualityResult.score,
+        });
         console.log(
-          `[summarizer] Quality judge: winner=${result.winner}, score=${result.score}`
+          `[summarizer] Quality judge: winner=${qualityResult.winner}, score=${qualityResult.score}`
         );
       }
 
-      // 4. Store summary in DynamoDB
-      const stored = await putSummary(arxivId, summary, targetDate);
+      // 4. Store summary in DynamoDB (with quality fields if available)
+      const stored = await putSummary(arxivId, summary, targetDate, qualityResult);
       console.log(`[summarizer] Summary stored for: ${arxivId}`);
 
       // 5. Generate embedding + store in S3 Vectors (Phase 3)
@@ -113,6 +125,7 @@ async function main() {
     } catch (err) {
       console.error(`[summarizer] Error processing ${arxivId}: ${err.message}`);
       console.error(err.stack);
+      errors.push({ arxiv_id: arxivId, message: err.message });
     }
   }
 
@@ -184,8 +197,34 @@ async function main() {
     // Non-fatal
   }
 
+  // ===== Pipeline-runs telemetry =====
+  // Status reflects only fatal failures inside summarization; per-paper errors
+  // surface as ``errors`` count but don't flip the pipeline to "error".
+  try {
+    const status = processedSummaries.length === 0 ? 'error' : 'success';
+    const errorMessage =
+      errors.length > 0 ? errors.map((e) => `${e.arxiv_id}: ${e.message}`).join('; ') : null;
+    await upsertRunStatus(targetDate, 'summarizer', status, {
+      error: errorMessage,
+      extra: {
+        papers_summarized: processedSummaries.length,
+        papers_attempted: paperIds.length,
+        claude_input_tokens: totalUsage.input_tokens,
+        claude_output_tokens: totalUsage.output_tokens,
+        claude_cache_read_tokens: totalUsage.cache_read_input_tokens,
+        claude_cache_create_tokens: totalUsage.cache_creation_input_tokens,
+        claude_cost_usd: Number(totalUsage.total_cost_usd.toFixed(6)),
+        quality_results: qualityResults,
+      },
+    });
+  } catch (err) {
+    console.warn(`[summarizer] pipeline-runs upsert failed: ${err.message}`);
+  }
+
   console.log(
-    `[summarizer] Complete. Processed ${processedSummaries.length}/${paperIds.length} papers.`
+    `[summarizer] Complete. Processed ${processedSummaries.length}/${paperIds.length} papers. ` +
+      `tokens=in:${totalUsage.input_tokens}/out:${totalUsage.output_tokens} ` +
+      `cost=$${totalUsage.total_cost_usd.toFixed(4)}`
   );
   process.exit(0);
 }
@@ -193,5 +232,10 @@ async function main() {
 main().catch((err) => {
   console.error(`[summarizer] Fatal error: ${err.message}`);
   console.error(err.stack);
+  // Best-effort failure telemetry — never block on this.
+  const targetDate = process.env.TARGET_DATE;
+  if (targetDate) {
+    upsertRunStatus(targetDate, 'summarizer', 'error', { error: err.message }).catch(() => {});
+  }
   process.exit(1);
 });

@@ -29,8 +29,12 @@ async function getPaper(arxivId) {
 
 /**
  * Store a summary record in the summaries table.
+ *
+ * ``qualityResult`` (optional) is the output of ``quality-judge.compare``;
+ * its ``winner`` / ``score`` are persisted on the summary so the dashboard
+ * can compute claude-vs-hf win rate without re-judging.
  */
-async function putSummary(arxivId, summary, date) {
+async function putSummary(arxivId, summary, date, qualityResult) {
   const item = {
     arxiv_id: arxivId,
     summary_version: "v1",
@@ -46,6 +50,11 @@ async function putSummary(arxivId, summary, date) {
     detail_practicality: summary.detail?.practicality,
     tags: summary.tags || [],
   };
+
+  if (qualityResult && typeof qualityResult === "object") {
+    if (qualityResult.winner) item.quality_winner = qualityResult.winner;
+    if (typeof qualityResult.score === "number") item.quality_score = qualityResult.score;
+  }
 
   await docClient.send(
     new PutCommand({

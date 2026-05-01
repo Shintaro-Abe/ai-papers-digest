@@ -1,6 +1,7 @@
 "use strict";
 
 const { execSync } = require("child_process");
+const { emptyUsage } = require("./claude-client");
 
 const COMPARE_PROMPT_TEMPLATE = `あなたはAI論文要約の品質評価者です。
 以下の2つの要約を比較し、AIエンジニアにとってどちらがより有用かを判定してください。
@@ -26,9 +27,13 @@ const COMPARE_PROMPT_TEMPLATE = `あなたはAI論文要約の品質評価者で
 
 /**
  * Compare a generated summary with an existing HF AI summary.
- * Returns { winner: 'generated' | 'existing', score: number }
+ * Returns ``{ winner, score, reason, usage }``.
+ *   - winner: ``"claude"`` (auto-generated) or ``"hf"`` (existing)
+ *   - score: integer (1-10), the winner's quality
+ *   - usage: token / cost figures for the judge call (or zeros on failure)
  */
 function compare(generatedSummary, hfAiSummary) {
+  const usage = emptyUsage();
   try {
     const prompt = COMPARE_PROMPT_TEMPLATE
       .replace("{{generated_summary}}", generatedSummary.compact_summary || "")
@@ -51,17 +56,31 @@ function compare(generatedSummary, hfAiSummary) {
       typeof text === "string" ? text.match(/\{[\s\S]*\}/) : null;
     const evaluation = jsonMatch ? JSON.parse(jsonMatch[0]) : parsed;
 
-    const winner = evaluation.winner === "B" ? "existing" : "generated";
+    const winner = evaluation.winner === "B" ? "hf" : "claude";
     const score = Number(evaluation.score) || 7;
+
+    if (parsed && typeof parsed === "object") {
+      const cliUsage = parsed.usage || {};
+      usage.input_tokens =
+        Number(cliUsage.input_tokens ?? cliUsage.prompt_tokens ?? 0) || 0;
+      usage.output_tokens =
+        Number(cliUsage.output_tokens ?? cliUsage.completion_tokens ?? 0) || 0;
+      usage.cache_creation_input_tokens =
+        Number(cliUsage.cache_creation_input_tokens ?? 0) || 0;
+      usage.cache_read_input_tokens =
+        Number(cliUsage.cache_read_input_tokens ?? 0) || 0;
+      usage.total_cost_usd =
+        Number(parsed.total_cost_usd ?? parsed.cost_usd ?? 0) || 0;
+    }
 
     console.log(
       `[quality-judge] Winner: ${winner}, Score: ${score}, Reason: ${evaluation.reason || "N/A"}`
     );
 
-    return { winner, score };
+    return { winner, score, reason: evaluation.reason || null, usage };
   } catch (err) {
-    console.warn(`[quality-judge] Comparison failed: ${err.message}. Defaulting to generated.`);
-    return { winner: "generated", score: 7 };
+    console.warn(`[quality-judge] Comparison failed: ${err.message}. Defaulting to claude.`);
+    return { winner: "claude", score: 7, reason: null, usage };
   }
 }
 

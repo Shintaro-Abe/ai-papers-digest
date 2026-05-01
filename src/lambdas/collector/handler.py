@@ -9,6 +9,7 @@ from typing import Any
 import boto3
 
 import arxiv_client, hf_client, paper_merger, s2_client
+from pipeline_runs import upsert_run_status
 
 logger = logging.getLogger()
 logger.setLevel(os.environ.get("LOG_LEVEL", "INFO"))
@@ -71,56 +72,84 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     categories_str = os.environ.get("TARGET_CATEGORIES", "cs.AI,cs.CL,cs.CV,cs.LG,stat.ML")
     categories = [c.strip() for c in categories_str.split(",")]
 
-    # 1. Fetch from Hugging Face (UTC dates — HF API is UTC-based)
-    # When an explicit date is provided (backfill/retry), derive HF dates
-    # from it; otherwise use the current UTC clock.
-    if "date" in event:
-        # Explicit date is JST; subtract 1 day to approximate UTC equivalent
-        base = datetime.strptime(collection_date, "%Y-%m-%d")
-        hf_date = (base - timedelta(days=1)).strftime("%Y-%m-%d")
-        hf_prev = (base - timedelta(days=2)).strftime("%Y-%m-%d")
-    else:
-        utc_now = datetime.now(UTC)
-        hf_date = utc_now.strftime("%Y-%m-%d")
-        hf_prev = (utc_now - timedelta(days=1)).strftime("%Y-%m-%d")
+    hf_count = 0
+    arxiv_count = 0
+    saved_count = 0
 
-    hf_today = hf_client.fetch_daily_papers(hf_date)
-    hf_prev_papers = hf_client.fetch_daily_papers(hf_prev)
-    seen_hf_ids = {p["arxiv_id"] for p in hf_today}
-    hf_papers = hf_today + [p for p in hf_prev_papers if p["arxiv_id"] not in seen_hf_ids]
-    hf_new = len(hf_papers) - len(hf_today)
-    logger.info(
-        "HF papers: %d (date=%s) + %d new (date=%s) = %d total",
-        len(hf_today), hf_date, hf_new, hf_prev, len(hf_papers),
+    try:
+        # 1. Fetch from Hugging Face (UTC dates — HF API is UTC-based)
+        # When an explicit date is provided (backfill/retry), derive HF dates
+        # from it; otherwise use the current UTC clock.
+        if "date" in event:
+            # Explicit date is JST; subtract 1 day to approximate UTC equivalent
+            base = datetime.strptime(collection_date, "%Y-%m-%d")
+            hf_date = (base - timedelta(days=1)).strftime("%Y-%m-%d")
+            hf_prev = (base - timedelta(days=2)).strftime("%Y-%m-%d")
+        else:
+            utc_now = datetime.now(UTC)
+            hf_date = utc_now.strftime("%Y-%m-%d")
+            hf_prev = (utc_now - timedelta(days=1)).strftime("%Y-%m-%d")
+
+        hf_today = hf_client.fetch_daily_papers(hf_date)
+        hf_prev_papers = hf_client.fetch_daily_papers(hf_prev)
+        seen_hf_ids = {p["arxiv_id"] for p in hf_today}
+        hf_papers = hf_today + [p for p in hf_prev_papers if p["arxiv_id"] not in seen_hf_ids]
+        hf_count = len(hf_papers)
+        hf_new = hf_count - len(hf_today)
+        logger.info(
+            "HF papers: %d (date=%s) + %d new (date=%s) = %d total",
+            len(hf_today), hf_date, hf_new, hf_prev, hf_count,
+        )
+
+        # 2. Fetch from arXiv
+        arxiv_papers = arxiv_client.fetch_recent_papers(categories)
+        arxiv_count = len(arxiv_papers)
+
+        # 3. Merge and deduplicate (arxiv_id dedup handles HF overlap)
+        merged = paper_merger.merge(hf_papers, arxiv_papers)
+
+        if not merged:
+            logger.warning("No papers collected for collection_date=%s", collection_date)
+            upsert_run_status(
+                collection_date, "collector", "success",
+                papers_collected_hf=hf_count,
+                papers_collected_arxiv=arxiv_count,
+                papers_collected_total=0,
+            )
+            return {"statusCode": 200, "body": "No papers found"}
+
+        # 4. Enrich with Semantic Scholar
+        arxiv_ids = [p["arxiv_id"] for p in merged]
+        s2_data = s2_client.fetch_batch(arxiv_ids, s2_secret_arn)
+        enriched = paper_merger.enrich(merged, s2_data)
+
+        # 5. Save to DynamoDB
+        saved_count = _save_papers(papers_table, enriched)
+        logger.info("Saved %d/%d papers to DynamoDB", saved_count, len(enriched))
+
+        # 6. Invoke scorer asynchronously
+        payload = {"date": collection_date}
+        lambda_client.invoke(
+            FunctionName=scorer_function,
+            InvocationType="Event",
+            Payload=json.dumps(payload),
+        )
+        logger.info("Invoked scorer for date=%s", collection_date)
+    except Exception as exc:
+        upsert_run_status(
+            collection_date, "collector", "error", error=str(exc),
+            papers_collected_hf=hf_count,
+            papers_collected_arxiv=arxiv_count,
+            papers_collected_total=saved_count,
+        )
+        raise
+
+    upsert_run_status(
+        collection_date, "collector", "success",
+        papers_collected_hf=hf_count,
+        papers_collected_arxiv=arxiv_count,
+        papers_collected_total=saved_count,
     )
-
-    # 2. Fetch from arXiv
-    arxiv_papers = arxiv_client.fetch_recent_papers(categories)
-
-    # 3. Merge and deduplicate (arxiv_id dedup handles HF overlap)
-    merged = paper_merger.merge(hf_papers, arxiv_papers)
-
-    if not merged:
-        logger.warning("No papers collected for collection_date=%s", collection_date)
-        return {"statusCode": 200, "body": "No papers found"}
-
-    # 4. Enrich with Semantic Scholar
-    arxiv_ids = [p["arxiv_id"] for p in merged]
-    s2_data = s2_client.fetch_batch(arxiv_ids, s2_secret_arn)
-    enriched = paper_merger.enrich(merged, s2_data)
-
-    # 5. Save to DynamoDB
-    saved_count = _save_papers(papers_table, enriched)
-    logger.info("Saved %d/%d papers to DynamoDB", saved_count, len(enriched))
-
-    # 6. Invoke scorer asynchronously
-    payload = {"date": collection_date}
-    lambda_client.invoke(
-        FunctionName=scorer_function,
-        InvocationType="Event",
-        Payload=json.dumps(payload),
-    )
-    logger.info("Invoked scorer for date=%s", collection_date)
 
     return {
         "statusCode": 200,
@@ -129,8 +158,8 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                 "date": collection_date,
                 "hf_date": hf_date,
                 "hf_prev_date": hf_prev,
-                "hf_count": len(hf_papers),
-                "arxiv_count": len(arxiv_papers),
+                "hf_count": hf_count,
+                "arxiv_count": arxiv_count,
                 "merged_count": len(merged),
                 "saved_count": saved_count,
             }

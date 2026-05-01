@@ -170,3 +170,28 @@ resource "aws_dynamodb_table" "config" {
 
   tags = var.tags
 }
+
+################################################################################
+# Pipeline Runs Table (monitoring dashboard data source)
+################################################################################
+resource "aws_dynamodb_table" "pipeline_runs" {
+  name         = "${var.table_name_prefix}-pipeline-runs"
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "date"
+
+  attribute {
+    name = "date"
+    type = "S"
+  }
+
+  ttl {
+    attribute_name = "ttl"
+    enabled        = true
+  }
+
+  point_in_time_recovery {
+    enabled = true
+  }
+
+  tags = var.tags
+}

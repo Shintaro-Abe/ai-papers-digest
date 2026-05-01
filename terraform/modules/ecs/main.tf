@@ -358,6 +358,10 @@ resource "aws_ecs_task_definition" "summarizer" {
           name  = "CLAUDE_SECRET_ID"
           value = var.secrets_manager_arn
         },
+        {
+          name  = "PIPELINE_RUNS_TABLE"
+          value = var.pipeline_runs_table_name
+        },
       ]
 
       secrets = [

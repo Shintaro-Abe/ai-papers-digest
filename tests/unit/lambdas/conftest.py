@@ -2,11 +2,19 @@
 
 import json
 import os
+import sys
 from pathlib import Path
 
 import pytest
 
 FIXTURES_DIR = Path(__file__).parent.parent.parent / "fixtures"
+SHARED_DIR = Path(__file__).resolve().parents[3] / "src" / "shared"
+
+# Lambda packaging copies shared/*.py flat into each function's zip, so
+# handlers do `from pipeline_runs import ...`. Make that import resolve in
+# the test environment by exposing src/shared on sys.path once at collection.
+if str(SHARED_DIR) not in sys.path:
+    sys.path.insert(0, str(SHARED_DIR))
 
 
 @pytest.fixture(autouse=True)
@@ -28,6 +36,7 @@ def _set_env_vars(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("ECS_SECURITY_GROUP", "sg-123")
     monkeypatch.setenv("TOP_N", "3")
     monkeypatch.setenv("LOG_LEVEL", "WARNING")
+    monkeypatch.setenv("PIPELINE_RUNS_TABLE", "test-pipeline-runs")
 
 
 @pytest.fixture()

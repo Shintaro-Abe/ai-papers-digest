@@ -10,6 +10,7 @@ from typing import Any
 import boto3
 from boto3.dynamodb.conditions import Key
 from filter import filter_papers
+from pipeline_runs import upsert_run_status
 from scoring import calculate_scores
 
 logger = logging.getLogger()
@@ -153,54 +154,81 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     config_table = os.environ["CONFIG_TABLE"]
     feedback_table = os.environ.get("FEEDBACK_TABLE")
 
-    # 1. Load weights
-    weights = _get_weights(config_table)
+    weights: dict[str, float] = {}
+    selected: list[dict[str, Any]] = []
 
-    # 2. Fetch today's papers
-    papers = _get_papers_by_date(papers_table, date)
-    if not papers:
-        logger.warning("No papers found for date=%s", date)
-        return {"statusCode": 200, "body": "No papers to score"}
+    try:
+        # 1. Load weights
+        weights = _get_weights(config_table)
 
-    # 3. Load feedback data for category-based scoring
-    feedback_data = _get_recent_feedback(feedback_table)
-    paper_lookup = {p["arxiv_id"]: p for p in papers} if feedback_data else None
-
-    # 4. Calculate scores
-    scored = calculate_scores(papers, weights, feedback_data or None, paper_lookup)
-
-    # 4. Get delivered IDs
-    delivered_ids = _get_delivered_ids(delivery_log_table)
-
-    # 5. Filter top N
-    selected = filter_papers(scored, delivered_ids, top_n)
-    if not selected:
-        logger.warning("No papers selected after filtering for date=%s", date)
-        return {"statusCode": 200, "body": "No papers selected"}
-
-    logger.info("Selected %d papers (top score=%.4f)", len(selected), selected[0]["score"])
-
-    # 6. Save scores back to papers table.
-    # DynamoDB resource API requires Decimal for numeric attributes, not float.
-    table = dynamodb.Table(papers_table)
-    update_failures = 0
-    for paper in scored:
-        try:
-            table.update_item(
-                Key={"arxiv_id": paper["arxiv_id"]},
-                UpdateExpression="SET score = :s",
-                ExpressionAttributeValues={":s": Decimal(str(paper["score"]))},
+        # 2. Fetch today's papers
+        papers = _get_papers_by_date(papers_table, date)
+        if not papers:
+            logger.warning("No papers found for date=%s", date)
+            upsert_run_status(
+                date, "scorer", "success",
+                papers_selected=0,
+                weights_snapshot=weights,
             )
-        except Exception:
-            update_failures += 1
-            if update_failures <= 3:
-                logger.exception("Failed to update score for %s", paper["arxiv_id"])
-    if update_failures:
-        logger.warning("Score update failures: %d / %d", update_failures, len(scored))
+            return {"statusCode": 200, "body": "No papers to score"}
 
-    # 7. Launch Fargate task
-    selected_ids = [p["arxiv_id"] for p in selected]
-    task_arn = _run_fargate_task(selected_ids, date)
+        # 3. Load feedback data for category-based scoring
+        feedback_data = _get_recent_feedback(feedback_table)
+        paper_lookup = {p["arxiv_id"]: p for p in papers} if feedback_data else None
+
+        # 4. Calculate scores
+        scored = calculate_scores(papers, weights, feedback_data or None, paper_lookup)
+
+        # 4. Get delivered IDs
+        delivered_ids = _get_delivered_ids(delivery_log_table)
+
+        # 5. Filter top N
+        selected = filter_papers(scored, delivered_ids, top_n)
+        if not selected:
+            logger.warning("No papers selected after filtering for date=%s", date)
+            upsert_run_status(
+                date, "scorer", "success",
+                papers_selected=0,
+                weights_snapshot=weights,
+            )
+            return {"statusCode": 200, "body": "No papers selected"}
+
+        logger.info("Selected %d papers (top score=%.4f)", len(selected), selected[0]["score"])
+
+        # 6. Save scores back to papers table.
+        # DynamoDB resource API requires Decimal for numeric attributes, not float.
+        table = dynamodb.Table(papers_table)
+        update_failures = 0
+        for paper in scored:
+            try:
+                table.update_item(
+                    Key={"arxiv_id": paper["arxiv_id"]},
+                    UpdateExpression="SET score = :s",
+                    ExpressionAttributeValues={":s": Decimal(str(paper["score"]))},
+                )
+            except Exception:
+                update_failures += 1
+                if update_failures <= 3:
+                    logger.exception("Failed to update score for %s", paper["arxiv_id"])
+        if update_failures:
+            logger.warning("Score update failures: %d / %d", update_failures, len(scored))
+
+        # 7. Launch Fargate task
+        selected_ids = [p["arxiv_id"] for p in selected]
+        task_arn = _run_fargate_task(selected_ids, date)
+    except Exception as exc:
+        upsert_run_status(
+            date, "scorer", "error", error=str(exc),
+            papers_selected=len(selected),
+            weights_snapshot=weights,
+        )
+        raise
+
+    upsert_run_status(
+        date, "scorer", "success",
+        papers_selected=len(selected),
+        weights_snapshot=weights,
+    )
 
     return {
         "statusCode": 200,

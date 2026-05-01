@@ -52,6 +52,10 @@ function buildPrompt(paper) {
 
 /**
  * Run claude CLI and parse JSON output.
+ *
+ * Returns ``{ data, usage }`` where ``usage`` carries token counts and cost
+ * lifted from the CLI's top-level JSON envelope (``input_tokens`` /
+ * ``output_tokens`` / ``total_cost_usd``). Caller may ignore ``usage``.
  */
 function callClaude(prompt) {
   let result;
@@ -91,16 +95,58 @@ function callClaude(prompt) {
   // Try to extract JSON from the text
   const jsonMatch =
     typeof text === "string" ? text.match(/\{[\s\S]*\}/) : null;
+  let data;
   if (jsonMatch) {
-    return JSON.parse(jsonMatch[0]);
+    data = JSON.parse(jsonMatch[0]);
+  } else if (typeof parsed === "object" && parsed.compact_summary) {
+    data = parsed;
+  } else {
+    throw new Error("Failed to extract JSON from Claude response");
   }
 
-  // If text is already an object with expected fields, return it
-  if (typeof parsed === "object" && parsed.compact_summary) {
-    return parsed;
-  }
+  return { data, usage: extractUsage(parsed) };
+}
 
-  throw new Error("Failed to extract JSON from Claude response");
+/**
+ * Pull usage / cost out of the Claude CLI envelope.
+ * Different versions surface fields slightly differently; tolerate missing keys.
+ */
+function extractUsage(parsed) {
+  if (!parsed || typeof parsed !== "object") return null;
+  const usage = parsed.usage || {};
+  const inputTokens =
+    Number(usage.input_tokens ?? usage.prompt_tokens ?? 0) || 0;
+  const outputTokens =
+    Number(usage.output_tokens ?? usage.completion_tokens ?? 0) || 0;
+  const cacheCreate = Number(usage.cache_creation_input_tokens ?? 0) || 0;
+  const cacheRead = Number(usage.cache_read_input_tokens ?? 0) || 0;
+  const totalCostUsd =
+    Number(parsed.total_cost_usd ?? parsed.cost_usd ?? 0) || 0;
+  return {
+    input_tokens: inputTokens,
+    output_tokens: outputTokens,
+    cache_creation_input_tokens: cacheCreate,
+    cache_read_input_tokens: cacheRead,
+    total_cost_usd: totalCostUsd,
+  };
+}
+
+function emptyUsage() {
+  return {
+    input_tokens: 0,
+    output_tokens: 0,
+    cache_creation_input_tokens: 0,
+    cache_read_input_tokens: 0,
+    total_cost_usd: 0,
+  };
+}
+
+function addUsage(target, addition) {
+  if (!addition) return target;
+  for (const key of Object.keys(target)) {
+    target[key] += Number(addition[key] || 0);
+  }
+  return target;
 }
 
 /**
@@ -115,11 +161,16 @@ function isValidSummaryLength(summary) {
 /**
  * Generate a summary for a paper using Claude CLI.
  * Retries once if compact_summary length is out of range.
+ *
+ * Returns ``{ summary, usage }``; ``usage`` aggregates token / cost across
+ * the initial call and any retry.
  */
 function generateSummary(paper) {
   const prompt = buildPrompt(paper);
+  const usage = emptyUsage();
 
-  let summary = callClaude(prompt);
+  let { data: summary, usage: firstUsage } = callClaude(prompt);
+  addUsage(usage, firstUsage);
 
   if (!isValidSummaryLength(summary)) {
     const currentLen = summary.compact_summary
@@ -133,7 +184,9 @@ function generateSummary(paper) {
       prompt +
       `\n\n前回の出力ではcompact_summaryが${currentLen}文字でした。必ず200〜400文字の範囲に収めてください。`;
 
-    summary = callClaude(retryPrompt);
+    const retried = callClaude(retryPrompt);
+    summary = retried.data;
+    addUsage(usage, retried.usage);
 
     if (!isValidSummaryLength(summary)) {
       console.warn(
@@ -142,7 +195,7 @@ function generateSummary(paper) {
     }
   }
 
-  return summary;
+  return { summary, usage };
 }
 
-module.exports = { generateSummary };
+module.exports = { generateSummary, emptyUsage, addUsage };

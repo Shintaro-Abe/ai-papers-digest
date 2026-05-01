@@ -3,12 +3,19 @@
 import json
 import logging
 import os
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta, timezone
 from typing import Any
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError, URLError
 
 import boto3
+from pipeline_runs import upsert_run_status
+
+JST = timezone(timedelta(hours=9))
+
+
+def _today_jst() -> str:
+    return datetime.now(JST).strftime("%Y-%m-%d")
 
 logger = logging.getLogger()
 logger.setLevel(os.environ.get("LOG_LEVEL", "INFO"))
@@ -60,53 +67,69 @@ def _refresh_token(refresh_token: str) -> dict[str, Any]:
 def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     """Refresh Claude OAuth token and update Secrets Manager."""
     secret_id = os.environ["CLAUDE_SECRET_ID"]
-
-    # 1. Load current credentials
-    credentials = _get_credentials(secret_id)
-    oauth = credentials.get("claudeAiOauth", {})
-
-    expires_at = oauth.get("expiresAt", 0)
-    now_ms = int(datetime.now(UTC).timestamp() * 1000)
-
-    # 2. Check if refresh is needed (expired or expiring within 5 min)
-    if now_ms + EXPIRY_BUFFER_MS < expires_at:
-        remaining_min = (expires_at - now_ms) / 60_000
-        logger.info("Token still valid for %.0f minutes, skipping refresh", remaining_min)
-        return {"statusCode": 200, "body": "Token still valid"}
-
-    logger.info("Token expired or expiring soon, refreshing...")
-
-    # 3. Refresh
-    refresh_token = oauth.get("refreshToken")
-    if not refresh_token:
-        logger.error("No refreshToken found in credentials")
-        return {"statusCode": 500, "body": "No refreshToken"}
+    today = _today_jst()
 
     try:
-        result = _refresh_token(refresh_token)
-    except HTTPError as e:
-        body = e.read().decode("utf-8", errors="replace")
-        logger.error("Token refresh HTTP %d: %s", e.code, body)
-        return {"statusCode": 500, "body": f"Refresh failed: HTTP {e.code}: {body}"}
-    except URLError as e:
-        logger.error("Token refresh request failed: %s", e)
-        return {"statusCode": 500, "body": f"Refresh failed: {e}"}
+        # 1. Load current credentials
+        credentials = _get_credentials(secret_id)
+        oauth = credentials.get("claudeAiOauth", {})
 
-    # 4. Update credentials
-    new_oauth = {
-        **oauth,
-        "accessToken": result["access_token"],
-        "refreshToken": result.get("refresh_token", refresh_token),
-        "expiresAt": now_ms + result.get("expires_in", 7200) * 1000,
-    }
-    if "scope" in result:
-        new_oauth["scopes"] = result["scope"].split(" ")
+        expires_at = oauth.get("expiresAt", 0)
+        now_ms = int(datetime.now(UTC).timestamp() * 1000)
 
-    new_credentials = {**credentials, "claudeAiOauth": new_oauth}
-    _save_credentials(secret_id, new_credentials)
+        # 2. Check if refresh is needed (expired or expiring within 5 min)
+        if now_ms + EXPIRY_BUFFER_MS < expires_at:
+            remaining_min = (expires_at - now_ms) / 60_000
+            logger.info("Token still valid for %.0f minutes, skipping refresh", remaining_min)
+            upsert_run_status(today, "token_refresher", "skipped")
+            return {"statusCode": 200, "body": "Token still valid"}
 
-    logger.info("Token refreshed successfully. New expiry: %d minutes",
-                result.get("expires_in", 7200) / 60)
+        logger.info("Token expired or expiring soon, refreshing...")
+
+        # 3. Refresh
+        refresh_token = oauth.get("refreshToken")
+        if not refresh_token:
+            logger.error("No refreshToken found in credentials")
+            upsert_run_status(
+                today, "token_refresher", "error", error="No refreshToken"
+            )
+            return {"statusCode": 500, "body": "No refreshToken"}
+
+        try:
+            result = _refresh_token(refresh_token)
+        except HTTPError as e:
+            body = e.read().decode("utf-8", errors="replace")
+            logger.error("Token refresh HTTP %d: %s", e.code, body)
+            upsert_run_status(
+                today, "token_refresher", "error",
+                error=f"HTTP {e.code}: {body}",
+            )
+            return {"statusCode": 500, "body": f"Refresh failed: HTTP {e.code}: {body}"}
+        except URLError as e:
+            logger.error("Token refresh request failed: %s", e)
+            upsert_run_status(today, "token_refresher", "error", error=str(e))
+            return {"statusCode": 500, "body": f"Refresh failed: {e}"}
+
+        # 4. Update credentials
+        new_oauth = {
+            **oauth,
+            "accessToken": result["access_token"],
+            "refreshToken": result.get("refresh_token", refresh_token),
+            "expiresAt": now_ms + result.get("expires_in", 7200) * 1000,
+        }
+        if "scope" in result:
+            new_oauth["scopes"] = result["scope"].split(" ")
+
+        new_credentials = {**credentials, "claudeAiOauth": new_oauth}
+        _save_credentials(secret_id, new_credentials)
+
+        logger.info("Token refreshed successfully. New expiry: %d minutes",
+                    result.get("expires_in", 7200) / 60)
+    except Exception as exc:
+        upsert_run_status(today, "token_refresher", "error", error=str(exc))
+        raise
+
+    upsert_run_status(today, "token_refresher", "success")
 
     return {
         "statusCode": 200,

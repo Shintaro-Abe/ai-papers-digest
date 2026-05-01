@@ -48,6 +48,14 @@ jobs:
               pip install -r "$SRC_DIR/requirements.txt" -t "$BUILD_DIR" -q
             fi
             cp "$SRC_DIR"/*.py "$BUILD_DIR"/
+            # Bundle shared helpers (e.g. pipeline_runs) flat alongside handler.py
+            # so handlers can `from pipeline_runs import upsert_run_status`.
+            for shared_file in src/shared/*.py; do
+              [ -f "$shared_file" ] || continue
+              base="$(basename "$shared_file")"
+              [ "$base" = "__init__.py" ] && continue
+              cp "$shared_file" "$BUILD_DIR/"
+            done
             cd "$BUILD_DIR" && zip -r "$ZIP_PATH" . -q && cd -
             echo "--- Deploying $name ---"
             FUNC_NAME="ai-papers-digest-${name//_/-}"
