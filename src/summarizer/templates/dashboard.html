@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>監視ダッシュボード - AI Papers Digest</title>
+  <link rel="stylesheet" href="/assets/style.css">
+</head>
+<body>
+  <header class="header">
+    <nav class="nav">
+      <a href="/" class="nav-brand">AI Papers Digest</a>
+      <div class="nav-links">
+        <a href="/tags/index.html">Tags</a>
+        <a href="/search.html">Search</a>
+        <a href="/dashboard.html">Dashboard</a>
+        <a href="/auth/logout.html?initiate=1" class="logout-link">ログアウト</a>
+      </div>
+    </nav>
+  </header>
+
+  <main class="container dashboard-container">
+    <h1 class="digest-heading">監視ダッシュボード</h1>
+    <p class="digest-count">最終更新: {{generated_at}}</p>
+
+    <section class="summary-cards">
+      <div class="summary-card">
+        <div class="summary-card-label">直近 7 日 収集件数</div>
+        <div class="summary-card-value" id="card-collected">{{card_collected}}</div>
+        <div class="summary-card-sub">HF + arXiv</div>
+      </div>
+      <div class="summary-card">
+        <div class="summary-card-label">直近 7 日 選定件数</div>
+        <div class="summary-card-value" id="card-selected">{{card_selected}}</div>
+        <div class="summary-card-sub">scorer 採用</div>
+      </div>
+      <div class="summary-card">
+        <div class="summary-card-label">直近 7 日 配信件数</div>
+        <div class="summary-card-value" id="card-delivered">{{card_delivered}}</div>
+        <div class="summary-card-sub">Slack 配信</div>
+      </div>
+      <div class="summary-card">
+        <div class="summary-card-label">直近 7 日 Claude コスト</div>
+        <div class="summary-card-value" id="card-cost">{{card_cost}}</div>
+        <div class="summary-card-sub">USD（要約 + 品質判定）</div>
+      </div>
+    </section>
+
+    <section class="chart-grid">
+      <div class="chart-container">
+        <h2 class="chart-title">収集件数の推移（30 日）</h2>
+        <canvas id="chart-collection"></canvas>
+      </div>
+      <div class="chart-container">
+        <h2 class="chart-title">最新の選定論文スコア内訳</h2>
+        <canvas id="chart-score-breakdown"></canvas>
+      </div>
+      <div class="chart-container">
+        <h2 class="chart-title">フィードバック分布（30 日）</h2>
+        <canvas id="chart-feedback"></canvas>
+      </div>
+      <div class="chart-container">
+        <h2 class="chart-title">スコアリング重み履歴</h2>
+        <canvas id="chart-weights"></canvas>
+      </div>
+      <div class="chart-container">
+        <h2 class="chart-title">パイプライン正常性（14 日）</h2>
+        <canvas id="chart-pipeline-health"></canvas>
+      </div>
+      <div class="chart-container">
+        <h2 class="chart-title">Claude コスト・トークン推移（30 日）</h2>
+        <canvas id="chart-cost"></canvas>
+      </div>
+      <div class="chart-container">
+        <h2 class="chart-title">Slack 配信実績（30 日）</h2>
+        <canvas id="chart-delivery"></canvas>
+      </div>
+      <div class="chart-container">
+        <h2 class="chart-title">学習ループ稼働状況</h2>
+        <canvas id="chart-learning-loop"></canvas>
+      </div>
+      <div class="chart-container">
+        <h2 class="chart-title">多様性メトリクス（直近 7 日）</h2>
+        <canvas id="chart-diversity"></canvas>
+      </div>
+      <div class="chart-container">
+        <h2 class="chart-title">要約品質スコア（30 日）</h2>
+        <canvas id="chart-quality"></canvas>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <p>&copy; AI Papers Digest</p>
+  </footer>
+
+  <script id="dashboard-data" type="application/json">{{data_json}}</script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+  <script src="/assets/dashboard.js"></script>
+</body>
+</html>

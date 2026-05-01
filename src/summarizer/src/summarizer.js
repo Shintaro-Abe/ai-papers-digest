@@ -9,6 +9,7 @@ const { generateEmbedding } = require('./embedding-client');
 const { putVector, getVector, querySimilar } = require('./vectors-client');
 const {
   generate: generateDashboard,
+  generateMonitoring,
   regenerateAllPapersAndDigests,
 } = require('./dashboard-generator');
 const { upsertRunStatus } = require('./pipeline-runs');
@@ -183,6 +184,15 @@ async function main() {
     console.error(`[summarizer] Failed to generate dashboard: ${err.message}`);
     console.error(err.stack);
     // Non-fatal: don't exit, just log
+  }
+
+  // ===== Monitoring dashboard =====
+  try {
+    await generateMonitoring(targetDate);
+  } catch (err) {
+    console.error(`[summarizer] Failed to generate monitoring dashboard: ${err.message}`);
+    console.error(err.stack);
+    // Non-fatal
   }
 
   // ===== Re-generate all historical paper / digest pages =====
