@@ -37,6 +37,9 @@ def _set_env_vars(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("TOP_N", "3")
     monkeypatch.setenv("LOG_LEVEL", "WARNING")
     monkeypatch.setenv("PIPELINE_RUNS_TABLE", "test-pipeline-runs")
+    # Pinned so any helper that creates a boto3 client (e.g. pipeline_runs)
+    # resolves an endpoint even in CI where AWS_DEFAULT_REGION is unset.
+    monkeypatch.setenv("AWS_DEFAULT_REGION", "ap-northeast-1")
 
 
 @pytest.fixture()

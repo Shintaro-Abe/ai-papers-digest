@@ -20,9 +20,16 @@ def _import_helper(monkeypatch: pytest.MonkeyPatch) -> None:
     deploy.yml flattens src/shared/*.py into each Lambda zip alongside
     handler.py, so the import statement in production code is
     ``from pipeline_runs import upsert_run_status``. Replicate that here.
+
+    Also pins AWS_DEFAULT_REGION so boto3 client construction inside the
+    helper resolves an endpoint even in environments (CI) where the env
+    var is not pre-populated.
     """
 
     sys.path.insert(0, str(SHARED_DIR))
+    monkeypatch.setenv("AWS_DEFAULT_REGION", "ap-northeast-1")
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "testing")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "testing")
 
 
 @pytest.fixture()
