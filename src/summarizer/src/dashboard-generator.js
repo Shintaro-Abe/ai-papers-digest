@@ -768,6 +768,35 @@ async function generateMonitoring(targetDate) {
     fetchWeightHistory(),
   ]);
   const papersById = await fetchPapersForSummaries(summaries);
+
+  // Derive weight history from pipeline-runs.weights_snapshot.
+  // Each entry carries {date, w1-w4, skipped} so it feeds both the weight
+  // history line chart and the learning-loop bar chart.
+  // Prefer config-table history when available; fall back to pipeline-runs.
+  const runsWithWeights = [...pipelineRuns]
+    .filter((r) => r.weights_snapshot)
+    .sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+  const derivedHistory = runsWithWeights.map((r, i) => {
+    const prev = runsWithWeights[i - 1];
+    let skipped = false;
+    if (prev) {
+      const delta = ['w1', 'w2', 'w3', 'w4'].reduce(
+        (sum, k) => sum + Math.abs(num(r.weights_snapshot[k]) - num(prev.weights_snapshot[k])),
+        0,
+      );
+      skipped = delta < 0.001;
+    }
+    return {
+      date: r.date,
+      w1: num(r.weights_snapshot.w1),
+      w2: num(r.weights_snapshot.w2),
+      w3: num(r.weights_snapshot.w3),
+      w4: num(r.weights_snapshot.w4),
+      skipped,
+    };
+  });
+  const effectiveWeightHistory = weightHistory.length > 0 ? weightHistory : derivedHistory;
+
   const data = {
     generatedAt: new Date().toISOString(),
     targetDate,
@@ -776,11 +805,11 @@ async function generateMonitoring(targetDate) {
       collection: aggregateCollectionVolume(pipelineRuns, targetDate),
       scoreBreakdown: aggregateLatestScores(summaries, papersById, pipelineRuns),
       feedback: aggregateFeedbackByCategory(feedback, summaries),
-      weights: aggregateWeightHistory(weightHistory),
+      weights: aggregateWeightHistory(effectiveWeightHistory),
       pipelineHealth: aggregatePipelineHealth(pipelineRuns, targetDate),
       cost: aggregateCost(pipelineRuns, targetDate),
       delivery: aggregateDelivery(pipelineRuns, targetDate),
-      learningLoop: aggregateLearningLoop(pipelineRuns, weightHistory, targetDate),
+      learningLoop: aggregateLearningLoop(pipelineRuns, effectiveWeightHistory, targetDate),
       diversity: computeDiversity(summaries, papersById),
       quality: aggregateQuality(summaries, targetDate),
     },

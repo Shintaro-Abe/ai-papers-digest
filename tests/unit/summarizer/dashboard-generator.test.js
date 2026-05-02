@@ -601,9 +601,9 @@ describe("renderDashboard", () => {
     assert.ok(html.includes("\\u003c/script"));
   });
 
-  it("contains the dashboard.js script tag and Chart.js CDN", () => {
+  it("contains the dashboard.js and chart.min.js script tags", () => {
     const html = renderDashboard(data);
     assert.ok(html.includes("/assets/dashboard.js"));
-    assert.ok(html.includes("cdn.jsdelivr.net/npm/chart.js"));
+    assert.ok(html.includes("/assets/chart.min.js"));
   });
 });
