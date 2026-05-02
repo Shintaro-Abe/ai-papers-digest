@@ -186,15 +186,6 @@ async function main() {
     // Non-fatal: don't exit, just log
   }
 
-  // ===== Monitoring dashboard =====
-  try {
-    await generateMonitoring(targetDate);
-  } catch (err) {
-    console.error(`[summarizer] Failed to generate monitoring dashboard: ${err.message}`);
-    console.error(err.stack);
-    // Non-fatal
-  }
-
   // ===== Re-generate all historical paper / digest pages =====
   // Propagates template/style updates (e.g., nav changes) to existing pages.
   // Uses cached summaries; no LLM calls.
@@ -229,6 +220,16 @@ async function main() {
     });
   } catch (err) {
     console.warn(`[summarizer] pipeline-runs upsert failed: ${err.message}`);
+  }
+
+  // ===== Monitoring dashboard =====
+  // Must run after upsertRunStatus so today's cost/token data is available.
+  try {
+    await generateMonitoring(targetDate);
+  } catch (err) {
+    console.error(`[summarizer] Failed to generate monitoring dashboard: ${err.message}`);
+    console.error(err.stack);
+    // Non-fatal
   }
 
   console.log(
