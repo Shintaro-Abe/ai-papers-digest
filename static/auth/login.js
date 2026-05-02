@@ -27,9 +27,9 @@
     var pkce = await window.AuthHelpers.generatePkce();
     var state = window.AuthHelpers.randomString(32);
 
-    sessionStorage.setItem('pkce_verifier', pkce.verifier);
-    sessionStorage.setItem('oauth_state', state);
-    sessionStorage.setItem('post_login_dest', dest);
+    localStorage.setItem('pkce_verifier', pkce.verifier);
+    localStorage.setItem('oauth_state', state);
+    localStorage.setItem('post_login_dest', dest);
 
     statusEl.textContent = 'Cognito ログイン画面へ遷移します';
     window.location.replace(window.AuthHelpers.loginUrl(pkce.challenge, state));

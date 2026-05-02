@@ -7,6 +7,9 @@
   // 1. Clear local cookies and any in-flight auth state
   window.AuthHelpers.clearTokens();
   sessionStorage.clear();
+  localStorage.removeItem('pkce_verifier');
+  localStorage.removeItem('oauth_state');
+  localStorage.removeItem('post_login_dest');
 
   // 2. Detect entry mode: ?initiate=1 means we kicked off logout from the UI;
   //    otherwise we are returning from Cognito's redirect.

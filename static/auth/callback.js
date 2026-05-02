@@ -20,32 +20,32 @@
   }
 
   // Validate state to prevent CSRF
-  var savedState = sessionStorage.getItem('oauth_state');
+  var savedState = localStorage.getItem('oauth_state');
   if (!savedState || savedState !== returnedState) {
     statusEl.textContent = 'セキュリティチェックに失敗しました（state mismatch）。再度サインインしてください。';
-    sessionStorage.removeItem('pkce_verifier');
-    sessionStorage.removeItem('oauth_state');
-    sessionStorage.removeItem('post_login_dest');
+    localStorage.removeItem('pkce_verifier');
+    localStorage.removeItem('oauth_state');
+    localStorage.removeItem('post_login_dest');
     return;
   }
 
-  var verifier = sessionStorage.getItem('pkce_verifier');
+  var verifier = localStorage.getItem('pkce_verifier');
   if (!verifier) {
     statusEl.textContent = 'PKCE 情報が見つかりません。再度サインインしてください。';
     return;
   }
 
-  // Re-validate dest from sessionStorage to defend in depth.
-  var dest = window.AuthHelpers.safeDest(sessionStorage.getItem('post_login_dest'));
+  // Re-validate dest from localStorage to defend in depth.
+  var dest = window.AuthHelpers.safeDest(localStorage.getItem('post_login_dest'));
 
   try {
     var tokens = await window.AuthHelpers.exchangeCodeForTokens(code, verifier);
     window.AuthHelpers.storeTokens(tokens);
 
     // Clean up
-    sessionStorage.removeItem('pkce_verifier');
-    sessionStorage.removeItem('oauth_state');
-    sessionStorage.removeItem('post_login_dest');
+    localStorage.removeItem('pkce_verifier');
+    localStorage.removeItem('oauth_state');
+    localStorage.removeItem('post_login_dest');
 
     window.location.replace(dest);
   } catch (err) {
