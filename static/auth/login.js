@@ -6,6 +6,8 @@
   // Read intended destination from query string and sanitize against open redirect.
   var params = new URLSearchParams(window.location.search);
   var dest = window.AuthHelpers.safeDest(params.get('dest'));
+  // Cap dest length to keep the state parameter within Cognito's 2048-char limit.
+  if (dest.length > 200) dest = '/';
 
   // 1. Try silent refresh if a refresh_token cookie exists
   var refreshToken = window.AuthHelpers.getCookie('refresh_token');
