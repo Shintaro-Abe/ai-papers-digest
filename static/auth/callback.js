@@ -26,22 +26,43 @@
     return;
   }
 
+  // Three-tier recovery, from most to least secure:
+  //   1. localStorage  — desktop / standard mobile browsers
+  //   2. Path=/auth/ cookies — SFSafariViewController (shares cookies with Safari)
+  //   3. state payload — WKWebView last resort (PKCE still protects token exchange)
   var savedNonce = localStorage.getItem('oauth_state');
+  var cookieNonce = window.AuthHelpers.getCookie('oauth_state');
   var verifier, dest;
 
+  function clearPkceStorage() {
+    localStorage.removeItem('pkce_verifier');
+    localStorage.removeItem('oauth_state');
+    localStorage.removeItem('post_login_dest');
+    window.AuthHelpers.deleteAuthCookie('pkce_verifier');
+    window.AuthHelpers.deleteAuthCookie('oauth_state');
+    window.AuthHelpers.deleteAuthCookie('post_login_dest');
+  }
+
   if (savedNonce) {
-    // localStorage available: validate nonce for CSRF protection.
+    // Tier 1: localStorage available — validate nonce for CSRF protection.
     if (savedNonce !== stateData.n) {
       statusEl.textContent = 'セキュリティチェックに失敗しました（state mismatch）。再度サインインしてください。';
-      localStorage.removeItem('pkce_verifier');
-      localStorage.removeItem('oauth_state');
-      localStorage.removeItem('post_login_dest');
+      clearPkceStorage();
       return;
     }
     verifier = localStorage.getItem('pkce_verifier') || stateData.v;
     dest = window.AuthHelpers.safeDest(localStorage.getItem('post_login_dest') || stateData.d);
+  } else if (cookieNonce) {
+    // Tier 2: Path=/auth/ cookie available (SFSafariViewController) — validate nonce.
+    if (cookieNonce !== stateData.n) {
+      statusEl.textContent = 'セキュリティチェックに失敗しました（state mismatch）。再度サインインしてください。';
+      clearPkceStorage();
+      return;
+    }
+    verifier = window.AuthHelpers.getCookie('pkce_verifier') || stateData.v;
+    dest = window.AuthHelpers.safeDest(window.AuthHelpers.getCookie('post_login_dest') || stateData.d);
   } else {
-    // localStorage unavailable (mobile cross-context): recover from state payload.
+    // Tier 3: WKWebView — no client storage across contexts; recover from state payload.
     // PKCE still protects token exchange even without nonce validation.
     verifier = stateData.v;
     dest = window.AuthHelpers.safeDest(stateData.d || '/');
@@ -56,10 +77,8 @@
     var tokens = await window.AuthHelpers.exchangeCodeForTokens(code, verifier);
     window.AuthHelpers.storeTokens(tokens);
 
-    // Clean up
-    localStorage.removeItem('pkce_verifier');
-    localStorage.removeItem('oauth_state');
-    localStorage.removeItem('post_login_dest');
+    // Clean up all three storage tiers
+    clearPkceStorage();
 
     window.location.replace(dest);
   } catch (err) {

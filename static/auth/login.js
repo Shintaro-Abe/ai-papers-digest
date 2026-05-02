@@ -34,9 +34,16 @@
     localStorage.setItem('oauth_state', nonce);
     localStorage.setItem('post_login_dest', dest);
 
-    // Encode nonce+verifier+dest into the state parameter so the flow
-    // survives cross-context mobile redirects (iOS WKWebView → Safari)
-    // where localStorage is unavailable on the callback page.
+    // Mirror into Path=/auth/ cookies (10-min TTL) for SFSafariViewController,
+    // which shares cookies with Safari even when localStorage is inaccessible
+    // after the cross-domain redirect back to the callback page.
+    window.AuthHelpers.setAuthCookie('pkce_verifier', pkce.verifier, 600);
+    window.AuthHelpers.setAuthCookie('oauth_state', nonce, 600);
+    window.AuthHelpers.setAuthCookie('post_login_dest', dest, 600);
+
+    // Encode nonce+verifier+dest into the state parameter as last-resort
+    // fallback for WKWebView, where both localStorage and cookies are
+    // inaccessible across browser contexts.
     var statePayload = window.AuthHelpers.encodeState(nonce, pkce.verifier, dest);
 
     statusEl.textContent = 'Cognito ログイン画面へ遷移します';

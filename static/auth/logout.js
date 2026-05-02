@@ -10,6 +10,9 @@
   localStorage.removeItem('pkce_verifier');
   localStorage.removeItem('oauth_state');
   localStorage.removeItem('post_login_dest');
+  window.AuthHelpers.deleteAuthCookie('pkce_verifier');
+  window.AuthHelpers.deleteAuthCookie('oauth_state');
+  window.AuthHelpers.deleteAuthCookie('post_login_dest');
 
   // 2. Detect entry mode: ?initiate=1 means we kicked off logout from the UI;
   //    otherwise we are returning from Cognito's redirect.

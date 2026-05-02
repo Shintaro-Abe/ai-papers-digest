@@ -54,6 +54,23 @@
     document.cookie = name + '=; Path=/; Max-Age=0; Secure; SameSite=Lax';
   }
 
+  // Path=/auth/ cookies for PKCE state — SFSafariViewController shares these
+  // with Safari even when localStorage is inaccessible across browser contexts.
+  function setAuthCookie(name, value, maxAgeSec) {
+    var parts = [
+      name + '=' + value,
+      'Path=/auth/',
+      'Secure',
+      'SameSite=Lax',
+      'Max-Age=' + Math.max(0, Math.floor(maxAgeSec)),
+    ];
+    document.cookie = parts.join('; ');
+  }
+
+  function deleteAuthCookie(name) {
+    document.cookie = name + '=; Path=/auth/; Max-Age=0; Secure; SameSite=Lax';
+  }
+
   function getCookie(name) {
     var pairs = document.cookie.split(';');
     for (var i = 0; i < pairs.length; i++) {
@@ -188,6 +205,8 @@
     generatePkce: generatePkce,
     setCookie: setCookie,
     deleteCookie: deleteCookie,
+    setAuthCookie: setAuthCookie,
+    deleteAuthCookie: deleteAuthCookie,
     getCookie: getCookie,
     loginUrl: loginUrl,
     logoutUrl: logoutUrl,
