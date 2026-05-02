@@ -19,24 +19,38 @@
     return;
   }
 
-  // Validate state to prevent CSRF
-  var savedState = localStorage.getItem('oauth_state');
-  if (!savedState || savedState !== returnedState) {
-    statusEl.textContent = 'セキュリティチェックに失敗しました（state mismatch）。再度サインインしてください。';
-    localStorage.removeItem('pkce_verifier');
-    localStorage.removeItem('oauth_state');
-    localStorage.removeItem('post_login_dest');
+  // Decode state payload: contains nonce, PKCE verifier, and dest.
+  var stateData = window.AuthHelpers.decodeState(returnedState);
+  if (!stateData) {
+    statusEl.textContent = 'セキュリティチェックに失敗しました（invalid state）。再度サインインしてください。';
     return;
   }
 
-  var verifier = localStorage.getItem('pkce_verifier');
+  var savedNonce = localStorage.getItem('oauth_state');
+  var verifier, dest;
+
+  if (savedNonce) {
+    // localStorage available: validate nonce for CSRF protection.
+    if (savedNonce !== stateData.n) {
+      statusEl.textContent = 'セキュリティチェックに失敗しました（state mismatch）。再度サインインしてください。';
+      localStorage.removeItem('pkce_verifier');
+      localStorage.removeItem('oauth_state');
+      localStorage.removeItem('post_login_dest');
+      return;
+    }
+    verifier = localStorage.getItem('pkce_verifier') || stateData.v;
+    dest = window.AuthHelpers.safeDest(localStorage.getItem('post_login_dest') || stateData.d);
+  } else {
+    // localStorage unavailable (mobile cross-context): recover from state payload.
+    // PKCE still protects token exchange even without nonce validation.
+    verifier = stateData.v;
+    dest = window.AuthHelpers.safeDest(stateData.d || '/');
+  }
+
   if (!verifier) {
     statusEl.textContent = 'PKCE 情報が見つかりません。再度サインインしてください。';
     return;
   }
-
-  // Re-validate dest from localStorage to defend in depth.
-  var dest = window.AuthHelpers.safeDest(localStorage.getItem('post_login_dest'));
 
   try {
     var tokens = await window.AuthHelpers.exchangeCodeForTokens(code, verifier);

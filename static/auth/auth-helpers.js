@@ -159,6 +159,30 @@
     return dest;
   }
 
+  // ---------------- State encoding ----------------
+  // Encodes PKCE state into the OAuth state parameter so it survives
+  // cross-context redirects on mobile (iOS WKWebView → Safari handoff,
+  // in-app browsers, etc.) where localStorage may be inaccessible on return.
+
+  function encodeState(nonce, verifier, dest) {
+    var json = JSON.stringify({ n: nonce, v: verifier, d: dest });
+    return btoa(json).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  }
+
+  function decodeState(state) {
+    if (!state) return null;
+    try {
+      var b64 = state.replace(/-/g, '+').replace(/_/g, '/');
+      var pad = (4 - (b64.length % 4)) % 4;
+      b64 += '==='.slice(0, pad);
+      var parsed = JSON.parse(atob(b64));
+      if (!parsed || typeof parsed.n !== 'string' || typeof parsed.v !== 'string') return null;
+      return parsed;
+    } catch (_) {
+      return null;
+    }
+  }
+
   // Expose helpers
   window.AuthHelpers = {
     generatePkce: generatePkce,
@@ -173,5 +197,7 @@
     clearTokens: clearTokens,
     randomString: randomString,
     safeDest: safeDest,
+    encodeState: encodeState,
+    decodeState: decodeState,
   };
 })();
