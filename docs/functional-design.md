@@ -881,11 +881,12 @@ sequenceDiagram
     E-->>U: 302 /auth/login.html?dest=/papers/2604.xxx.html
     U->>CF: GET /auth/login.html (BYPASS)
     CF->>S: 静的取得
-    U->>U: PKCE code_verifier 生成 + sessionStorage
-    U->>C: 302 /oauth2/authorize?code_challenge=...
+    U->>U: PKCE code_verifier 生成 + localStorage + Path=/auth/ Cookie
+    U->>C: 302 /oauth2/authorize?code_challenge=... state=(nonce+verifier+dest)
     C-->>U: ログイン画面
     U->>C: email + password
     C-->>U: 302 /auth/callback.html?code=...
+    Note over U: 3段階フォールバックで verifier 復元:<br/>1.localStorage(nonce検証) 2.Cookie(SFSafariVC) 3.stateデコード(WKWebView)
     U->>C: POST /oauth2/token (code + verifier)
     C-->>U: id_token / refresh_token
     U->>U: Cookie に保存 (Secure / SameSite=Lax)

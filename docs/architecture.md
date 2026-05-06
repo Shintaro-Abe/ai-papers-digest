@@ -159,12 +159,20 @@ graph LR
 **S3 バケット構造:**
 ```
 s3://ai-papers-digest-pages-{account_id}/
+├── assets/                             # deploy.yml が static/（auth/ 除く）を /assets/ にデプロイ
+│   ├── style.css                       # 共通スタイルシート（モバイルレスポンシブ、ダッシュボード用クラス含む）
+│   ├── search.js                       # 検索ロジック（lunr.js）
+│   ├── dashboard.js                    # 監視ダッシュボード Chart.js 描画（10チャート）
+│   └── chart.min.js                    # Chart.js v4 自己ホスト（CSP script-src 'self' のため CDN 不可）
+├── auth/                               # Cognito OAuth PKCE フロー用静的ページ（Lambda@Edge バイパス対象）
+│   ├── login.html / login.js           # PKCE 生成・localStorage + Cookie ミラー・Hosted UI リダイレクト
+│   ├── callback.html / callback.js     # 3段階フォールバックで verifier 復元・tokens 交換・Cookie 設定
+│   ├── logout.html / logout.js         # Cookie/localStorage クリア・Cognito Logout エンドポイント
+│   ├── auth-helpers.js                 # PKCE / Cookie / safeDest 共通ユーティリティ
+│   └── config.js                       # COGNITO_DOMAIN / CLIENT_ID / CLOUDFRONT_DOMAIN 注入用
 ├── index.html                          # トップページ（最新ダイジェストへリダイレクト）
-├── search.html                         # 検索ページ（lunr.js + 日本語部分文字列検索）
 ├── search-index.json                   # 検索用インデックス（タイトル・要約・タグ）
-├── assets/
-│   ├── style.css                       # 共通スタイルシート
-│   └── search.js                       # 検索ロジック（lunr.js）
+├── dashboard.html                      # 監視ダッシュボード（Fargate 日次生成）
 ├── digest/
 │   ├── 2026-04-04.html                 # 日次ダイジェストページ
 │   └── ...
@@ -177,6 +185,15 @@ s3://ai-papers-digest-pages-{account_id}/
     ├── 強化学習.html
     └── ...
 ```
+
+**S3 バケットポリシー:**
+
+| ステートメント | Effect | 条件 |
+|---|---|---|
+| `AllowCloudFrontServicePrincipalReadOnly` | Allow (s3:GetObject) | `AWS:SourceArn = CloudFront ディストリビューション ARN` |
+| `DenyNonCloudFrontGetObject` | **Deny** (s3:GetObject) | `AWS:SourceArn ≠ CloudFront ディストリビューション ARN` |
+
+Deny ステートメントにより、同一アカウント IAM からの pre-signed URL やコンソール直接アクセスでも `s3:GetObject` は拒否される。ECS パイプラインの `s3:PutObject` には影響しない。
 
 ## 3. Lambda 関数仕様
 
@@ -841,13 +858,15 @@ sequenceDiagram
     CF->>S3: 静的取得
     S3-->>User: login.html
 
-    User->>User: PKCE code_verifier 生成、sessionStorage に保存
-    User->>Cognito: 302 /oauth2/authorize?... code_challenge=...
+    User->>User: PKCE code_verifier 生成
+    Note over User: localStorage + Path=/auth/ Cookie に保存<br/>state パラメータに verifier を base64url エンコード
+    User->>Cognito: 302 /oauth2/authorize?... code_challenge=... state=...
     Cognito-->>User: ログイン画面
     User->>Cognito: email + password
-    Cognito-->>User: 302 /auth/callback.html?code=...
+    Cognito-->>User: 302 /auth/callback.html?code=...&state=...
 
     User->>CF: GET /auth/callback.html (BYPASS)
+    Note over User: 3段階フォールバックで verifier 復元:<br/>1. localStorage (nonce 検証)<br/>2. Path=/auth/ Cookie (SFSafariViewController)<br/>3. state デコード (WKWebView 最終手段)
     User->>Cognito: POST /oauth2/token (code + code_verifier)
     Cognito-->>User: id_token / refresh_token
     User->>User: Cookie に保存 (Secure / SameSite=Lax)
@@ -857,6 +876,18 @@ sequenceDiagram
     Edge->>S3: forward
     S3-->>User: 詳細ページ
 ```
+
+### PKCE ハイブリッド 3段階フォールバック
+
+iOS モバイルブラウザのコンテキスト分離問題（WKWebView / SFSafariViewController）に対応するため、login.js / callback.js でハイブリッド方式を採用：
+
+| Tier | ストレージ | 対象環境 | CSRF 保護 |
+|---|---|---|---|
+| 1 | `localStorage` | デスクトップ・標準モバイル | nonce 検証 |
+| 2 | `Path=/auth/` Cookie (TTL 600s) | SFSafariViewController（Safari とクッキー共有） | nonce 検証 |
+| 3 | state パラメータ decode | WKWebView（ストレージ不可） | PKCE のみ |
+
+`clearPkceStorage()` が全3ストレージを一括クリア（callback 完了時 / logout 時）。
 
 ### 切り戻し設計
 

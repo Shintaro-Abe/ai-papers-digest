@@ -226,18 +226,23 @@ docs/
 
 ### `static/` — S3 静的アセット
 
+deploy.yml が `static/`（`auth/` を除く）を `s3://.../assets/` へ、`static/auth/` を `s3://.../auth/` へ同期する。
+
 ```
 static/
-├── style.css                          # 共通スタイルシート（モバイルレスポンシブ対応、ダッシュボード用 .summary-cards / .chart-grid 含む）
+├── style.css                          # 共通スタイルシート（モバイルレスポンシブ、.summary-cards / .chart-grid 含む）
 ├── search.js                          # クライアントサイド検索（lunr.js + 日本語部分文字列検索）
-├── dashboard.js                       # 監視ダッシュボード Chart.js 描画スクリプト（10チャート、空データ時メッセージ表示）
-└── auth/                              # Cognito OAuth (PKCE) フロー用静的ページ
-    ├── login.html                     # PKCE code_verifier 生成、silent refresh、Hosted UI へ 302
-    ├── callback.html                  # code → tokens 交換、Cookie 設定後 dest にリダイレクト
-    ├── logout.html                    # Cookie 削除 + Cognito Logout エンドポイント
-    ├── login.js / callback.js / logout.js
-    ├── auth-helpers.js                # PKCE / Cookie / safeDest 共通ユーティリティ
-    └── config.js                      # COGNITO_DOMAIN / CLIENT_ID / CLOUDFRONT_DOMAIN 注入用 (deploy.yml が sed)
+├── dashboard.js                       # 監視ダッシュボード Chart.js 描画（10チャート、空データ時メッセージ表示）
+├── chart.min.js                       # Chart.js v4 自己ホスト（CSP script-src 'self' 対応。CDN 不可）
+└── auth/                              # Cognito OAuth PKCE フロー用（Lambda@Edge バイパス対象）
+    ├── login.html                     # PKCE 開始。silent refresh 試行後 Hosted UI へ 302
+    ├── login.js                       # localStorage + Path=/auth/ Cookie に verifier/nonce 保存、state にも encode
+    ├── callback.html                  # トークン交換ページ
+    ├── callback.js                    # 3段階フォールバック(localStorage→Cookie→state decode)で verifier 復元、tokens 交換
+    ├── logout.html                    # ログアウトページ
+    ├── logout.js                      # localStorage/Cookie/sessionStorage クリア + Cognito Logout エンドポイント
+    ├── auth-helpers.js                # PKCE / Cookie / safeDest 共通ユーティリティ。setAuthCookie / deleteAuthCookie (Path=/auth/ TTL 600s) を含む
+    └── config.js                      # COGNITO_DOMAIN / CLIENT_ID / CLOUDFRONT_DOMAIN 注入用（deploy.yml が sed）
 ```
 
 ## 3. ファイル配置ルール
