@@ -229,11 +229,10 @@ data "aws_iam_policy_document" "task" {
   }
 
   statement {
-    sid    = "SecretsManagerReadWrite"
+    sid    = "SecretsManagerRead"
     effect = "Allow"
     actions = [
       "secretsmanager:GetSecretValue",
-      "secretsmanager:PutSecretValue",
     ]
     resources = [var.secrets_manager_arn]
   }
@@ -355,10 +354,6 @@ resource "aws_ecs_task_definition" "summarizer" {
           value = "paper-embeddings"
         },
         {
-          name  = "CLAUDE_SECRET_ID"
-          value = var.secrets_manager_arn
-        },
-        {
           name  = "PIPELINE_RUNS_TABLE"
           value = var.pipeline_runs_table_name
         },
@@ -374,7 +369,7 @@ resource "aws_ecs_task_definition" "summarizer" {
 
       secrets = [
         {
-          name      = "CLAUDE_ACCESS_TOKEN"
+          name      = "CLAUDE_CODE_OAUTH_TOKEN"
           valueFrom = var.secrets_manager_arn
         },
       ]

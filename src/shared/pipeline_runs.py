@@ -71,7 +71,7 @@ def upsert_run_status(
     Args:
         date: JST date string (YYYY-MM-DD).
         lambda_name: Logical name (collector / scorer / deliverer / weight_adjuster
-            / token_refresher / summarizer). Used as the field prefix.
+            / summarizer). Used as the field prefix.
         status: ``success`` / ``error`` / ``running`` / ``skipped``.
         error: Optional error message (truncated to 500 chars).
         table_name: Override for the table; defaults to env ``PIPELINE_RUNS_TABLE``.

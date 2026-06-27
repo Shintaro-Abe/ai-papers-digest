@@ -63,19 +63,15 @@ src/
 │   │   ├── handler.py                 #   エントリポイント。pipeline-runs に upsert + scoring_weights_history を 12 件循環で保持
 │   │   ├── weight_optimizer.py        #   ウェイト最適化ロジック
 │   │   └── requirements.txt
-│   │
-│   └── token_refresher/               # Claude OAuth トークン自動リフレッシュ Lambda
-│       ├── handler.py                 #   エントリポイント。Secrets Manager 上の credentials を期限前に refresh
-│       └── requirements.txt
 │
 ├── summarizer/                        # Fargate 要約生成コンテナ（Node.js）
 │   ├── Dockerfile                     #   コンテナイメージ定義
-│   ├── entrypoint.sh                  #   エントリポイント（トークン配置・書き戻し）
+│   ├── entrypoint.sh                  #   エントリポイント（ANTHROPIC_API_KEY を unset → アプリ実行）
 │   ├── buildspec.yml                  #   CodeBuild ビルド仕様
 │   ├── package.json                   #   npm 依存定義
 │   ├── src/
 │   │   ├── summarizer.js              #   メインエントリポイント
-│   │   ├── claude-client.js           #   claude -p CLI ラッパー（usage トークン/コスト抽出含む）
+│   │   ├── claude-client.js           #   Agent SDK query() ラッパー（usage トークン/コスト抽出含む）
 │   │   ├── dynamo-client.js           #   DynamoDB 読み書き（summaries に quality_winner / quality_score 保存）
 │   │   ├── s3-uploader.js             #   S3 HTML アップロード
 │   │   ├── html-generator.js          #   HTML テンプレートレンダリング
@@ -252,7 +248,7 @@ static/
 | ディレクトリ | 言語 | ランタイム | 配置するもの |
 |------------|------|-----------|------------|
 | `src/lambdas/` | Python 3.12 | AWS Lambda | 各 Lambda 関数のハンドラ + ビジネスロジック |
-| `src/summarizer/` | Node.js 22 | ECS Fargate | Claude CLI 要約生成 + HTML 生成 |
+| `src/summarizer/` | Node.js 22 | ECS Fargate | Agent SDK `query()` 要約生成 + HTML 生成 |
 | `src/shared/` | Python | - | Lambda 間で共有する定数・ユーティリティ |
 | `terraform/` | HCL | Terraform | インフラ定義のみ（アプリコードは含めない） |
 | `tests/` | Python / JavaScript | pytest / node:test | テストコードのみ |
@@ -381,7 +377,6 @@ htmlcov/
 | `src/lambdas/deliverer/` | o | o | o | o | o |
 | `src/lambdas/feedback/` | - | o | o | o | o |
 | `src/lambdas/weight_adjuster/` | - | o | o | o | o |
-| `src/lambdas/token_refresher/` | - | - | o | o | o |
 | `src/summarizer/` | o | o | o | o | o |
 | `src/summarizer/src/embedding-client.js` | - | - | o | o | o |
 | `src/summarizer/src/vectors-client.js` | - | - | o | o | o |

@@ -67,14 +67,14 @@ async function main() {
 
       // 2. Generate summary with Claude
       console.log(`[summarizer] Generating summary for: ${paper.title}`);
-      const { summary, usage: summaryUsage } = generateSummary(paper);
+      const { summary, usage: summaryUsage } = await generateSummary(paper);
       addUsage(totalUsage, summaryUsage);
 
       // 3. Quality comparison if existing summary available
       let qualityResult = null;
       if (paper.hf_ai_summary) {
         console.log(`[summarizer] Comparing with existing HF AI summary...`);
-        qualityResult = compare(summary, paper.hf_ai_summary);
+        qualityResult = await compare(summary, paper.hf_ai_summary);
         addUsage(totalUsage, qualityResult.usage);
         qualityResults.push({
           arxiv_id: arxivId,
