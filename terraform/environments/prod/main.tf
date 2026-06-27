@@ -48,14 +48,7 @@ resource "aws_secretsmanager_secret" "semantic_scholar_api_key" {
   tags = var.tags
 }
 
-# 旧: Claude Code CLI ヘッドレス用の .credentials.json（短命OAuth）を格納。
-# Agent SDK 移行のカットオーバー検証完了までロールバック用に残置。安定後に削除する。
-resource "aws_secretsmanager_secret" "claude_auth_token" {
-  name = "ai-papers-digest/claude-auth-token"
-  tags = var.tags
-}
-
-# 新: Agent SDK 用。claude setup-token で生成した約1年有効の OAuth トークン文字列。
+# Agent SDK 用。claude setup-token で生成した約1年有効の OAuth トークン文字列。
 # 値の投入は手動（runbook 参照）。Terraform はシークレットの箱のみ管理する。
 resource "aws_secretsmanager_secret" "claude_code_oauth_token" {
   name = "ai-papers-digest/claude-code-oauth-token"
@@ -330,8 +323,8 @@ module "eventbridge" {
   deliverer_lambda_arn  = module.lambda_deliverer.function_arn
   deliverer_lambda_name = module.lambda_deliverer.function_name
   ecs_cluster_arn       = module.ecs.cluster_arn
-  # 一時停止中: 毎日のパイプライン & ECS完了トリガを無効化（再開時は true に戻す）
-  schedule_enabled = false
+  # Agent SDK 移行完了・本番スモーク成功につき日次パイプラインを再開（2026-06-27）
+  schedule_enabled = true
   tags             = var.tags
 }
 
