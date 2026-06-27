@@ -87,6 +87,28 @@ data "aws_iam_policy_document" "pages_bucket_policy" {
       values   = [aws_cloudfront_distribution.pages.arn]
     }
   }
+
+  # Deny all GetObject requests that do not originate from this CloudFront
+  # distribution. Prevents pre-signed URL or direct IAM access from bypassing
+  # Lambda@Edge JWT authentication.
+  statement {
+    sid    = "DenyNonCloudFrontGetObject"
+    effect = "Deny"
+
+    principals {
+      type        = "*"
+      identifiers = ["*"]
+    }
+
+    actions   = ["s3:GetObject"]
+    resources = ["${aws_s3_bucket.pages.arn}/*"]
+
+    condition {
+      test     = "StringNotEquals"
+      variable = "AWS:SourceArn"
+      values   = [aws_cloudfront_distribution.pages.arn]
+    }
+  }
 }
 
 resource "aws_s3_bucket_policy" "pages" {

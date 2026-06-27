@@ -48,8 +48,17 @@ resource "aws_secretsmanager_secret" "semantic_scholar_api_key" {
   tags = var.tags
 }
 
+# 旧: Claude Code CLI ヘッドレス用の .credentials.json（短命OAuth）を格納。
+# Agent SDK 移行のカットオーバー検証完了までロールバック用に残置。安定後に削除する。
 resource "aws_secretsmanager_secret" "claude_auth_token" {
   name = "ai-papers-digest/claude-auth-token"
+  tags = var.tags
+}
+
+# 新: Agent SDK 用。claude setup-token で生成した約1年有効の OAuth トークン文字列。
+# 値の投入は手動（runbook 参照）。Terraform はシークレットの箱のみ管理する。
+resource "aws_secretsmanager_secret" "claude_code_oauth_token" {
+  name = "ai-papers-digest/claude-code-oauth-token"
   tags = var.tags
 }
 
@@ -126,7 +135,7 @@ module "ecs" {
   config_table_name        = module.dynamodb.config_table_name
   feedback_table_name      = module.dynamodb.feedback_table_name
   detail_page_base_url     = module.s3_cloudfront.detail_page_base_url
-  secrets_manager_arn      = aws_secretsmanager_secret.claude_auth_token.arn
+  secrets_manager_arn      = aws_secretsmanager_secret.claude_code_oauth_token.arn
   dynamodb_table_arns = [
     module.dynamodb.papers_table_arn,
     module.dynamodb.summaries_table_arn,
@@ -308,53 +317,22 @@ module "lambda_deliverer" {
   tags = var.tags
 }
 
-# --- Lambda: token_refresher ---
-
-module "lambda_token_refresher" {
-  source = "../../modules/lambda"
-
-  function_name    = "ai-papers-digest-token-refresher"
-  timeout          = 30
-  memory_size      = 128
-  filename         = data.archive_file.lambda_placeholder.output_path
-  source_code_hash = data.archive_file.lambda_placeholder.output_base64sha256
-
-  environment_variables = {
-    CLAUDE_SECRET_ID    = aws_secretsmanager_secret.claude_auth_token.arn
-    PIPELINE_RUNS_TABLE = module.dynamodb.pipeline_runs_table_name
-    LOG_LEVEL           = "INFO"
-  }
-
-  policy_statements = [
-    {
-      effect    = "Allow"
-      actions   = ["secretsmanager:GetSecretValue", "secretsmanager:PutSecretValue"]
-      resources = [aws_secretsmanager_secret.claude_auth_token.arn]
-    },
-    {
-      effect    = "Allow"
-      actions   = ["dynamodb:UpdateItem", "dynamodb:PutItem"]
-      resources = [module.dynamodb.pipeline_runs_table_arn]
-    },
-  ]
-
-  tags = var.tags
-}
+# token_refresher Lambda は Agent SDK 移行で廃止。
+# 約1年有効の CLAUDE_CODE_OAUTH_TOKEN を使うため、起動毎のトークンリフレッシュが不要になった。
 
 # --- EventBridge ---
 
 module "eventbridge" {
   source = "../../modules/eventbridge"
 
-  collector_lambda_arn        = module.lambda_collector.function_arn
-  collector_lambda_name       = module.lambda_collector.function_name
-  deliverer_lambda_arn        = module.lambda_deliverer.function_arn
-  deliverer_lambda_name       = module.lambda_deliverer.function_name
-  ecs_cluster_arn             = module.ecs.cluster_arn
-  token_refresher_lambda_arn  = module.lambda_token_refresher.function_arn
-  token_refresher_lambda_name = module.lambda_token_refresher.function_name
-  schedule_enabled            = true
-  tags                        = var.tags
+  collector_lambda_arn  = module.lambda_collector.function_arn
+  collector_lambda_name = module.lambda_collector.function_name
+  deliverer_lambda_arn  = module.lambda_deliverer.function_arn
+  deliverer_lambda_name = module.lambda_deliverer.function_name
+  ecs_cluster_arn       = module.ecs.cluster_arn
+  # 一時停止中: 毎日のパイプライン & ECS完了トリガを無効化（再開時は true に戻す）
+  schedule_enabled = false
+  tags             = var.tags
 }
 
 # --- Monitoring ---
@@ -468,7 +446,9 @@ resource "aws_cloudwatch_event_rule" "weekly_weight_adjuster" {
   name                = "ai-papers-digest-weekly-weight"
   description         = "Weekly weight adjustment - Monday JST 5:00 (UTC 20:00 Sunday)"
   schedule_expression = "cron(0 20 ? * SUN *)"
-  tags                = var.tags
+  # 一時停止中: 週次の重み調整を無効化（再開時は "ENABLED" に戻す）
+  state = "DISABLED"
+  tags  = var.tags
 }
 
 resource "aws_cloudwatch_event_target" "weight_adjuster" {

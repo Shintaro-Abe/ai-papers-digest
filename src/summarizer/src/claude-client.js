@@ -1,6 +1,10 @@
 "use strict";
 
-const { execSync } = require("child_process");
+const { query } = require("@anthropic-ai/claude-agent-sdk");
+
+// Pin the model explicitly: without it the SDK defaults to haiku, which is too
+// weak for paper summarization. Overridable via env for prod tuning.
+const MODEL = process.env.CLAUDE_MODEL || "sonnet";
 
 const SUMMARY_PROMPT_TEMPLATE = `あなたはAI/機械学習分野の論文要約エキスパートです。
 以下のarXiv論文情報を読み、AIエンジニア向けに日本語で要約してください。
@@ -51,83 +55,66 @@ function buildPrompt(paper) {
 }
 
 /**
- * Run claude CLI and parse JSON output.
+ * Run a single-shot Agent SDK query and parse JSON output.
  *
  * Returns ``{ data, usage }`` where ``usage`` carries token counts and cost
- * lifted from the CLI's top-level JSON envelope (``input_tokens`` /
- * ``output_tokens`` / ``total_cost_usd``). Caller may ignore ``usage``.
+ * lifted from the SDK result message (``input_tokens`` / ``output_tokens`` /
+ * ``total_cost_usd``). Caller may ignore ``usage``.
+ *
+ * Authentication is supplied out-of-band via the Claude subscription
+ * (``CLAUDE_CODE_OAUTH_TOKEN`` env in prod, ``~/.claude/.credentials.json``
+ * locally) — no API key. ``allowedTools: []`` + ``maxTurns: 1`` make this a
+ * pure, non-interactive text generation with no tool/file/shell access.
  */
-function callClaude(prompt) {
-  let result;
+async function callClaude(prompt) {
+  let resultMsg = null;
   try {
-    result = execSync("claude -p --output-format json --max-turns 1", {
-      input: prompt,
-      encoding: "utf-8",
-      maxBuffer: 10 * 1024 * 1024,
-      timeout: 300_000,
-      stdio: ["pipe", "pipe", "pipe"],
-    });
-  } catch (err) {
-    const stderr = err.stderr ? err.stderr.toString().slice(0, 200) : "no stderr";
-    const stdout = err.stdout ? err.stdout.toString() : "";
-    // Extract only safe fields from Claude CLI JSON output (avoid leaking tokens/session data)
-    let safeMessage = "no details";
-    try {
-      const parsed = JSON.parse(stdout);
-      if (parsed.is_error) {
-        safeMessage = (parsed.result || "").slice(0, 200);
-      }
-    } catch {
-      safeMessage = stdout.slice(0, 100);
+    for await (const message of query({
+      prompt,
+      options: {
+        model: MODEL,
+        allowedTools: [],
+        maxTurns: 1,
+        permissionMode: "dontAsk",
+      },
+    })) {
+      if (message.type === "result") resultMsg = message;
     }
-    throw new Error(`Claude CLI failed. stderr: ${stderr} | detail: ${safeMessage}`);
+  } catch (err) {
+    const detail = err && err.message ? String(err.message).slice(0, 200) : "no details";
+    throw new Error(`Agent SDK query failed: ${detail}`);
   }
 
-  const parsed = JSON.parse(result);
-
-  // The claude CLI with --output-format json wraps the response.
-  // Extract the text content.
-  const text =
-    typeof parsed === "string"
-      ? parsed
-      : parsed.result || parsed.content || parsed.text || JSON.stringify(parsed);
-
-  // Try to extract JSON from the text
-  const jsonMatch =
-    typeof text === "string" ? text.match(/\{[\s\S]*\}/) : null;
-  let data;
-  if (jsonMatch) {
-    data = JSON.parse(jsonMatch[0]);
-  } else if (typeof parsed === "object" && parsed.compact_summary) {
-    data = parsed;
-  } else {
-    throw new Error("Failed to extract JSON from Claude response");
+  if (!resultMsg || resultMsg.is_error) {
+    const detail = resultMsg ? String(resultMsg.result || "").slice(0, 200) : "no result message";
+    throw new Error(`Agent SDK returned error: ${detail}`);
   }
 
-  return { data, usage: extractUsage(parsed) };
+  const text = typeof resultMsg.result === "string" ? resultMsg.result : "";
+  // The model is instructed to emit JSON only; tolerate stray prose by
+  // extracting the first {...} block.
+  const jsonMatch = text.match(/\{[\s\S]*\}/);
+  if (!jsonMatch) {
+    throw new Error("Failed to extract JSON from Agent SDK response");
+  }
+  const data = JSON.parse(jsonMatch[0]);
+
+  return { data, usage: extractUsage(resultMsg) };
 }
 
 /**
- * Pull usage / cost out of the Claude CLI envelope.
- * Different versions surface fields slightly differently; tolerate missing keys.
+ * Pull usage / cost out of the Agent SDK result message.
+ * Tolerate missing keys across SDK versions.
  */
-function extractUsage(parsed) {
-  if (!parsed || typeof parsed !== "object") return null;
-  const usage = parsed.usage || {};
-  const inputTokens =
-    Number(usage.input_tokens ?? usage.prompt_tokens ?? 0) || 0;
-  const outputTokens =
-    Number(usage.output_tokens ?? usage.completion_tokens ?? 0) || 0;
-  const cacheCreate = Number(usage.cache_creation_input_tokens ?? 0) || 0;
-  const cacheRead = Number(usage.cache_read_input_tokens ?? 0) || 0;
-  const totalCostUsd =
-    Number(parsed.total_cost_usd ?? parsed.cost_usd ?? 0) || 0;
+function extractUsage(resultMsg) {
+  if (!resultMsg || typeof resultMsg !== "object") return null;
+  const usage = resultMsg.usage || {};
   return {
-    input_tokens: inputTokens,
-    output_tokens: outputTokens,
-    cache_creation_input_tokens: cacheCreate,
-    cache_read_input_tokens: cacheRead,
-    total_cost_usd: totalCostUsd,
+    input_tokens: Number(usage.input_tokens ?? 0) || 0,
+    output_tokens: Number(usage.output_tokens ?? 0) || 0,
+    cache_creation_input_tokens: Number(usage.cache_creation_input_tokens ?? 0) || 0,
+    cache_read_input_tokens: Number(usage.cache_read_input_tokens ?? 0) || 0,
+    total_cost_usd: Number(resultMsg.total_cost_usd ?? 0) || 0,
   };
 }
 
@@ -159,17 +146,17 @@ function isValidSummaryLength(summary) {
 }
 
 /**
- * Generate a summary for a paper using Claude CLI.
+ * Generate a summary for a paper using the Claude Agent SDK.
  * Retries once if compact_summary length is out of range.
  *
  * Returns ``{ summary, usage }``; ``usage`` aggregates token / cost across
  * the initial call and any retry.
  */
-function generateSummary(paper) {
+async function generateSummary(paper) {
   const prompt = buildPrompt(paper);
   const usage = emptyUsage();
 
-  let { data: summary, usage: firstUsage } = callClaude(prompt);
+  let { data: summary, usage: firstUsage } = await callClaude(prompt);
   addUsage(usage, firstUsage);
 
   if (!isValidSummaryLength(summary)) {
@@ -184,7 +171,7 @@ function generateSummary(paper) {
       prompt +
       `\n\n前回の出力ではcompact_summaryが${currentLen}文字でした。必ず200〜400文字の範囲に収めてください。`;
 
-    const retried = callClaude(retryPrompt);
+    const retried = await callClaude(retryPrompt);
     summary = retried.data;
     addUsage(usage, retried.usage);
 

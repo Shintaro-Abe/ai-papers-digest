@@ -70,8 +70,8 @@ data "aws_iam_policy_document" "trust_policy" {
 }
 
 resource "aws_iam_role" "github_actions" {
-  name               = var.iam_role_name
-  assume_role_policy = data.aws_iam_policy_document.trust_policy.json
+  name                 = var.iam_role_name
+  assume_role_policy   = data.aws_iam_policy_document.trust_policy.json
   max_session_duration = 3600 # 1時間
 
   tags = var.tags

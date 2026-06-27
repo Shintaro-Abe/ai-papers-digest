@@ -8,7 +8,7 @@
 |---|------------|-------------------|------|:-----:|
 | 1 | Slack Incoming Webhook URL | `ai-papers-digest/slack-webhook-url` | Slack チャンネルへの要約配信 | 1 |
 | 2 | Semantic Scholar API Key | `ai-papers-digest/semantic-scholar-api-key` | 論文の引用数・TLDR 取得 | 1 |
-| 3 | Claude Max 認証トークン | `ai-papers-digest/claude-auth-token` | Fargate で `claude -p` CLI を実行 | 1 |
+| 3 | Claude サブスク OAuth トークン | `ai-papers-digest/claude-code-oauth-token` | Fargate で Claude Agent SDK (`query()`) を実行 | 1 |
 | 4 | Slack Signing Secret | `ai-papers-digest/slack-signing-secret` | Slack リアクション署名検証 | 2 |
 | 5 | Slack Bot Token | `ai-papers-digest/slack-bot-token` | chat.postMessage + リアクション取得 | 2 |
 | 6 | Slack チャンネル ID | 環境変数 `SLACK_CHANNEL_ID` | 投稿先チャンネル指定 | 2 |
@@ -46,33 +46,55 @@
 
 **レート制限:** 認証済みで 1 リクエスト/秒（未認証より大幅に緩和）
 
-### 2.3 Claude Max 認証トークン
+### 2.3 Claude サブスク OAuth トークン（Agent SDK 用）
 
-**形式:** OAuth アクセストークン文字列
+**形式:** `claude setup-token` が出力する OAuth トークン文字列（`CLAUDE_CODE_OAUTH_TOKEN`）。**約1年有効・自動リフレッシュなし**。
 
-**前提:** Claude Max プラン（Max 5x: $100/月 または Max 20x: $200/月）に加入済みであること
+**前提:** Claude サブスクリプション（Pro / Max）に加入済みであること。Agent SDK のサブスク利用は個人利用の範囲（外部提供しない本パイプライン）で許可される。
 
-1. ローカル PC に Claude Code CLI をインストール:
-   ```bash
-   npm install -g @anthropic-ai/claude-code
-   ```
-2. CLI を起動してブラウザ認証:
-   ```bash
-   claude
-   ```
-3. ブラウザが開き、Anthropic アカウントでログイン
-4. 認証完了後、以下のパスから認証情報を確認:
-   ```bash
-   cat ~/.claude/credentials.json
-   # または
-   cat ~/.claude/.credentials.json
-   ```
-5. JSON 内の `accessToken`（または `oauthToken`）フィールドの値をコピー
+> ⚠️ **このトークンは実質パスワード**。1年間有効な bearer 資格情報なので、以下のセキュリティ手順を厳守する。**チャットや AI アシスタントに値を貼らない**。
 
-**注意事項:**
-- トークンの有効期限・リフレッシュ仕様は Anthropic 公式ドキュメントで要確認
-- 有効期限切れ時は再度 `claude` コマンドでブラウザ認証が必要
-- Fargate タスクでトークンが期限切れになった場合、要約生成が失敗する → CloudWatch Alarm で検知
+#### 手順 1: 1年トークンの生成（ローカル PC・人手必須）
+
+```bash
+npm install -g @anthropic-ai/claude-code   # 未導入の場合のみ
+claude setup-token                          # ブラウザが開く → Anthropic アカウントでログイン
+```
+
+完了するとターミナルに長いトークン文字列（`CLAUDE_CODE_OAUTH_TOKEN`）が表示される。ブラウザ認証が必須のため、この手順だけは無人化できない。
+
+#### 手順 2: Secrets Manager への安全な格納
+
+トークンをシェル履歴・コマンドライン引数・ログに残さない方法で投入する。**ファイル経由 + 投入後に確実消去**を推奨:
+
+```bash
+# 1. 制限付きファイルにトークンを書く（履歴に値を残さないため対話入力 read -s を使う）
+umask 077
+read -s -p "Paste CLAUDE_CODE_OAUTH_TOKEN: " TOKEN && printf '%s' "$TOKEN" > /tmp/cc_token && unset TOKEN
+echo
+
+# 2. Secrets Manager に投入（--secret-string file:// で引数に値を出さない）
+aws secretsmanager put-secret-value \
+  --secret-id ai-papers-digest/claude-code-oauth-token \
+  --secret-string file:///tmp/cc_token \
+  --region ap-northeast-1 --query 'Name' --output text
+
+# 3. 一時ファイルを確実に消去
+shred -u /tmp/cc_token 2>/dev/null || rm -f /tmp/cc_token
+```
+
+> シークレットの「箱」（`aws_secretsmanager_secret.claude_code_oauth_token`）は Terraform が作成する。**値の投入のみ手動**。
+
+#### 手順 3: 動作の確認
+
+ECS タスクは起動時に `CLAUDE_CODE_OAUTH_TOKEN` を env 注入され、Agent SDK が自動でこのトークンを使う。カットオーバー時は ECS タスクを手動 1 回実行し、CloudWatch ログで要約が成功することを確認する。
+
+**運用上の注意:**
+- **約1年で失効・自動更新なし** → 期限をカレンダー登録し、毎年 `claude setup-token` を再実行して手順 2 で再投入する
+- 漏洩が疑われる場合は claude.ai のアカウント設定でトークンを失効（revoke）し、新規に発行して再投入する
+- 失効すると要約生成が失敗する → CloudWatch Alarm で検知
+- `ANTHROPIC_API_KEY` をコンテナ env に設定しないこと（設定するとサブスク認証より優先され、想定外の従量課金になる。entrypoint で `unset` 済み）
+- 旧シークレット `ai-papers-digest/claude-auth-token` は移行のロールバック用に一時残置。カットオーバー安定後に削除する
 
 ### 2.4 Phase 2: Slack App 設定変更
 
@@ -170,10 +192,10 @@ aws secretsmanager put-secret-value \
   --secret-string "your-s2-api-key-here" \
   --region ap-northeast-1
 
-# 3. Claude Auth Token
+# 3. Claude サブスク OAuth トークン（値はファイル経由で投入。§2.3 手順2 参照）
 aws secretsmanager put-secret-value \
-  --secret-id ai-papers-digest/claude-auth-token \
-  --secret-string "your-claude-oauth-token-here" \
+  --secret-id ai-papers-digest/claude-code-oauth-token \
+  --secret-string file:///tmp/cc_token \
   --region ap-northeast-1
 ```
 
@@ -199,7 +221,7 @@ aws secretsmanager put-secret-value \
 
 ```bash
 # 値が登録されていることを確認（値の先頭10文字のみ表示）
-for secret in slack-webhook-url semantic-scholar-api-key claude-auth-token slack-signing-secret slack-bot-token; do
+for secret in slack-webhook-url semantic-scholar-api-key claude-code-oauth-token slack-signing-secret slack-bot-token; do
   echo -n "ai-papers-digest/$secret: "
   aws secretsmanager get-secret-value \
     --secret-id "ai-papers-digest/$secret" \
@@ -219,7 +241,7 @@ Step 1.12  terraform apply          ← Secrets Manager の「箱」が作成さ
          シークレット値を登録        ← ★ ここで 3件すべて登録（推奨）
                 ↓
 Step 2.9   collector 動作確認       ← Semantic Scholar API Key を使用
-Step 4.1   Claude CLI 動作検証      ← Claude Auth Token を使用
+Step 4.1   Agent SDK 動作検証       ← Claude OAuth トークンを使用
 Step 5.5   deliverer 動作確認       ← Slack Webhook URL を使用
 Step 6.3   E2E パイプラインテスト    ← 全シークレットを使用
 ```
@@ -229,7 +251,7 @@ Step 6.3   E2E パイプラインテスト    ← 全シークレットを使用
 | シークレット | 最初に必要な Step | 理由 |
 |------------|-----------------|------|
 | Semantic Scholar API Key | Step 2.9（collector 動作確認） | 外部 API 呼び出しで API Key が必要 |
-| Claude Auth Token | Step 4.1（Claude CLI 動作検証） | Fargate で `claude -p` を実行するため |
+| Claude OAuth トークン | Step 4.1（Agent SDK 動作検証） | Fargate で Agent SDK `query()` を実行するため |
 | Slack Webhook URL | Step 5.5（deliverer 動作確認） | Slack チャンネルへの投稿テスト |
 | Slack Signing Secret | Phase 2 Step 3.6（terraform apply 後） | フィードバック Lambda の署名検証に必要 |
 | Slack Bot Token | Phase 2 Step 2.5（deliverer 移行テスト） | chat.postMessage での投稿に必要 |
@@ -249,8 +271,8 @@ aws secretsmanager put-secret-value \
   --secret-string "your-s2-api-key" --region ap-northeast-1
 
 aws secretsmanager put-secret-value \
-  --secret-id ai-papers-digest/claude-auth-token \
-  --secret-string "your-claude-token" --region ap-northeast-1
+  --secret-id ai-papers-digest/claude-code-oauth-token \
+  --secret-string file:///tmp/cc_token --region ap-northeast-1
 
 aws secretsmanager put-secret-value \
   --secret-id ai-papers-digest/slack-webhook-url \

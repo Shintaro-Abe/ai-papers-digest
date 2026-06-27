@@ -7,7 +7,7 @@
 | レイヤー | 技術 | バージョン | 選定理由 |
 |---------|------|-----------|---------|
 | Lambda ランタイム | Python 3.12 | 3.12.x | AWS SDK（boto3）との親和性、arXiv XML パース（feedparser）、軽量スクリプトに最適 |
-| Fargate コンテナ | Node.js 22 LTS | 22.x | Claude CLI（npm パッケージ `@anthropic-ai/claude-code`）のネイティブ実行環境 |
+| Fargate コンテナ | Node.js 22 LTS | 22.x | Claude Agent SDK（npm パッケージ `@anthropic-ai/claude-agent-sdk`）の実行環境 |
 | IaC | Terraform | >= 1.9 | AWS リソース管理の業界標準、状態管理・モジュール化が容易 |
 | CI/CD | GitHub Actions | - | リポジトリ統合、Terraform plan/apply の自動化 |
 
@@ -16,7 +16,7 @@
 | サービス | 用途 | Phase | 構成 |
 |---------|------|-------|------|
 | **Lambda** | データ収集、スコアリング、Slack配信、フィードバック収集 | 1〜2 | Python 3.12, arm64 |
-| **ECS Fargate** | 要約生成（Claude CLI）+ S3 ページ生成 | 1 | スポットタスク、日次起動 |
+| **ECS Fargate** | 要約生成（Claude Agent SDK）+ S3 ページ生成 | 1 | スポットタスク、日次起動 |
 | **ECR** | Fargate 用 Docker イメージ管理 | 1 | プライベートリポジトリ、MUTABLE タグ（`latest` 更新用）、プッシュ時スキャン有効 |
 | **EventBridge** | 日次/週次スケジュール、ECS タスク状態変更イベント | 1〜2 | スケジュールルール + イベントルール |
 | **DynamoDB** | 論文・要約・フィードバック・設定の永続化 | 1〜2 | オンデマンドキャパシティ |
@@ -35,7 +35,7 @@
 
 | サービス | 用途 | 認証 |
 |---------|------|------|
-| Claude Max プラン | LLM 要約生成（`claude -p` CLI） | Max サブスクリプション認証 |
+| Claude Max プラン | LLM 要約生成（Agent SDK `query()`） | Max サブスクリプション OAuth トークン（`CLAUDE_CODE_OAUTH_TOKEN`） |
 | arXiv API | 論文メタデータ取得 | 認証不要 |
 | Hugging Face Papers API | 論文リスト + upvote 取得 | 認証不要 |
 | Semantic Scholar API | 引用数・TLDR 取得 | API キー（無料） |
@@ -71,7 +71,7 @@ graph TB
         HF[HF API]
         AR[arXiv API]
         SS[S2 API]
-        Claude[Claude CLI<br/>Anthropic 認証]
+        Claude[Claude Agent SDK<br/>Anthropic 認証]
         Slack[Slack API]
     end
 
@@ -110,12 +110,12 @@ graph TB
 graph LR
     subgraph "ECS クラスター: ai-papers-digest"
         subgraph "タスク定義: summarizer"
-            C1[コンテナ: summarizer<br/>Node.js 22 + Claude CLI<br/>0.5 vCPU / 1GB RAM]
+            C1[コンテナ: summarizer<br/>Node.js 22 + Agent SDK<br/>0.5 vCPU / 1GB RAM]
         end
     end
 
     ECR[ECR リポジトリ] -->|イメージ pull| C1
-    C1 -->|claude -p| Claude[Claude Max]
+    C1 -->|query()| Claude[Claude Max]
     C1 -->|PutObject| S3[(S3)]
     C1 -->|PutItem| DDB[(DynamoDB)]
 ```
@@ -124,7 +124,7 @@ graph LR
 |------|-----|------|
 | 起動タイプ | FARGATE | サーバーレス、日次のみ稼働 |
 | キャパシティプロバイダー | FARGATE_SPOT | コスト最小化（中断時はリトライで対応） |
-| CPU | 0.5 vCPU | Claude CLI 実行に十分 |
+| CPU | 0.5 vCPU | Agent SDK `query()` 実行に十分 |
 | メモリ | 1 GB | JSON パース + HTML テンプレート生成 |
 | プラットフォーム | Linux/ARM64 | Graviton、コスト20%削減 |
 | エフェメラルストレージ | 21 GB（デフォルト） | 十分 |
@@ -159,12 +159,20 @@ graph LR
 **S3 バケット構造:**
 ```
 s3://ai-papers-digest-pages-{account_id}/
+├── assets/                             # deploy.yml が static/（auth/ 除く）を /assets/ にデプロイ
+│   ├── style.css                       # 共通スタイルシート（モバイルレスポンシブ、ダッシュボード用クラス含む）
+│   ├── search.js                       # 検索ロジック（lunr.js）
+│   ├── dashboard.js                    # 監視ダッシュボード Chart.js 描画（10チャート）
+│   └── chart.min.js                    # Chart.js v4 自己ホスト（CSP script-src 'self' のため CDN 不可）
+├── auth/                               # Cognito OAuth PKCE フロー用静的ページ（Lambda@Edge バイパス対象）
+│   ├── login.html / login.js           # PKCE 生成・localStorage + Cookie ミラー・Hosted UI リダイレクト
+│   ├── callback.html / callback.js     # 3段階フォールバックで verifier 復元・tokens 交換・Cookie 設定
+│   ├── logout.html / logout.js         # Cookie/localStorage クリア・Cognito Logout エンドポイント
+│   ├── auth-helpers.js                 # PKCE / Cookie / safeDest 共通ユーティリティ
+│   └── config.js                       # COGNITO_DOMAIN / CLIENT_ID / CLOUDFRONT_DOMAIN 注入用
 ├── index.html                          # トップページ（最新ダイジェストへリダイレクト）
-├── search.html                         # 検索ページ（lunr.js + 日本語部分文字列検索）
 ├── search-index.json                   # 検索用インデックス（タイトル・要約・タグ）
-├── assets/
-│   ├── style.css                       # 共通スタイルシート
-│   └── search.js                       # 検索ロジック（lunr.js）
+├── dashboard.html                      # 監視ダッシュボード（Fargate 日次生成）
 ├── digest/
 │   ├── 2026-04-04.html                 # 日次ダイジェストページ
 │   └── ...
@@ -177,6 +185,15 @@ s3://ai-papers-digest-pages-{account_id}/
     ├── 強化学習.html
     └── ...
 ```
+
+**S3 バケットポリシー:**
+
+| ステートメント | Effect | 条件 |
+|---|---|---|
+| `AllowCloudFrontServicePrincipalReadOnly` | Allow (s3:GetObject) | `AWS:SourceArn = CloudFront ディストリビューション ARN` |
+| `DenyNonCloudFrontGetObject` | **Deny** (s3:GetObject) | `AWS:SourceArn ≠ CloudFront ディストリビューション ARN` |
+
+Deny ステートメントにより、同一アカウント IAM からの pre-signed URL やコンソール直接アクセスでも `s3:GetObject` は拒否される。ECS パイプラインの `s3:PutObject` には影響しない。
 
 ## 3. Lambda 関数仕様
 
@@ -263,17 +280,6 @@ s3://ai-papers-digest-pages-{account_id}/
 | 環境変数 | `FEEDBACK_TABLE`, `PAPERS_TABLE`, `CONFIG_TABLE`, `PIPELINE_RUNS_TABLE` |
 | 副次出力 | `config` テーブルの `scoring_weights_history` キーに直近 12 件の重みスナップショット (date / w1-w4 / skipped / feedback_count / papers_count) を append |
 
-#### token-refresher（Claude OAuth トークン自動リフレッシュ）
-
-| 設定 | 値 |
-|------|-----|
-| 関数名 | `ai-papers-digest-token-refresher` |
-| メモリ | 128 MB |
-| タイムアウト | 30 秒 |
-| トリガー | EventBridge スケジュール（短間隔ポーリング） |
-| 環境変数 | `CLAUDE_SECRET_ID`, `PIPELINE_RUNS_TABLE` |
-| 動作 | Secrets Manager 上の Claude credentials を期限 5 分前にリフレッシュ。期限内ならスキップ |
-
 #### auth-edge（Lambda@Edge による JWT 検証、認証機能）
 
 | 設定 | 値 |
@@ -296,19 +302,16 @@ s3://ai-papers-digest-pages-{account_id}/
 ```dockerfile
 FROM node:22-slim
 
-# Claude CLI インストール
-RUN npm install -g @anthropic-ai/claude-code
-
 # 作業ディレクトリ
 WORKDIR /app
 
-# アプリケーションコード
-COPY package.json ./
-RUN npm install --production
+# アプリケーションコード（Claude Agent SDK は dependencies に含まれ npm ci で導入）
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev
 COPY src/ ./src/
 COPY templates/ ./templates/
 
-# エントリポイント（トークン配置 → アプリ実行 → トークン書き戻し）
+# エントリポイント（ANTHROPIC_API_KEY を unset → アプリ実行）
 COPY entrypoint.sh ./
 RUN chmod +x entrypoint.sh
 ENTRYPOINT ["./entrypoint.sh"]
@@ -318,10 +321,10 @@ ENTRYPOINT ["./entrypoint.sh"]
 
 ```
 /app/
-├── entrypoint.sh              # トークン配置 → アプリ実行 → トークン書き戻し
+├── entrypoint.sh              # ANTHROPIC_API_KEY を unset → アプリ実行
 ├── src/
 │   ├── summarizer.js          # メインエントリポイント
-│   ├── claude-client.js       # claude -p ラッパー
+│   ├── claude-client.js       # Agent SDK query() ラッパー（usage トークン/コスト抽出含む）
 │   ├── dynamo-client.js       # DynamoDB 読み書き
 │   ├── s3-uploader.js         # S3 HTML アップロード
 │   ├── html-generator.js      # HTML テンプレートレンダリング
@@ -335,64 +338,66 @@ ENTRYPOINT ["./entrypoint.sh"]
 └── package-lock.json
 ```
 
-### Claude CLI 実行方式
+### Claude Agent SDK 実行方式
 
 ```javascript
 // claude-client.js の概要
-const { execSync } = require('child_process');
+const { query } = require('@anthropic-ai/claude-agent-sdk');
 
-function generateSummary(paperData) {
+async function generateSummary(paperData) {
   const prompt = buildPrompt(paperData);
 
-  // stdin でプロンプトを渡し、JSON で結果を取得
-  const result = execSync(
-    'claude -p --output-format json --max-turns 1',
-    {
-      input: prompt,
-      encoding: 'utf-8',
-      timeout: 120_000,  // 1論文あたり最大2分
-      maxBuffer: 1024 * 1024,  // 1MB
-    }
-  );
+  // query() で単発・非対話のテキスト生成
+  let resultMessage;
+  for await (const message of query({
+    prompt,
+    options: {
+      model: process.env.CLAUDE_MODEL || 'sonnet',
+      allowedTools: [],          // ツール呼び出しなし（純粋なテキスト生成）
+      maxTurns: 1,               // 単発
+      permissionMode: 'dontAsk', // 非対話
+    },
+  })) {
+    if (message.type === 'result') resultMessage = message;
+  }
 
-  return JSON.parse(result);
+  // result メッセージの result（文字列）から JSON を抽出。
+  // usage（input_tokens / output_tokens / cache_creation_input_tokens /
+  // cache_read_input_tokens）と total_cost_usd も取得する。
+  return JSON.parse(extractJson(resultMessage.result));
 }
 ```
 
 ### 認証方式
 
-Claude Max プランの OAuth 認証トークンを Secrets Manager 経由で Fargate タスクに渡す。
+`claude setup-token` で生成した**約1年有効の OAuth トークン文字列**を Secrets Manager に格納し、ECS タスク定義の `secrets` で環境変数 `CLAUDE_CODE_OAUTH_TOKEN` に注入する。Agent SDK の `query()` がこの env を直接読み、Max サブスクリプション枠で実行される。
 
 | 方式 | 設定 |
 |------|------|
-| **OAuth トークン** | Secrets Manager からトークン（`credentials.json` 全体）を取得し、環境変数 `CLAUDE_ACCESS_TOKEN` に設定 |
+| **OAuth トークン** | Secrets Manager `ai-papers-digest/claude-code-oauth-token` のトークン文字列を、ECS タスク定義の `secrets` で環境変数 `CLAUDE_CODE_OAUTH_TOKEN` に注入 |
 
-**トークン自動リフレッシュの仕組み:**
+**トークン注入の仕組み:**
 
 ```mermaid
 sequenceDiagram
     participant SM as Secrets Manager
+    participant EX as ECS実行ロール
     participant EP as entrypoint.sh
-    participant CLI as Claude CLI
-    participant APP as summarizer.js
+    participant APP as summarizer.js - Agent SDK
 
-    EP->>SM: GetSecretValue (CLAUDE_ACCESS_TOKEN)
-    SM-->>EP: credentials.json
-    EP->>EP: ~/.claude/.credentials.json に書き込み
+    EX->>SM: GetSecretValue (claude-code-oauth-token)
+    SM-->>EX: OAuth トークン文字列
+    EX->>EP: CLAUDE_CODE_OAUTH_TOKEN を env に設定してコンテナ起動
+    EP->>EP: unset ANTHROPIC_API_KEY
     EP->>APP: node src/summarizer.js 起動
-    APP->>CLI: claude -p (要約生成)
-    Note over CLI: accessToken 期限切れの場合<br/>refreshToken で自動リフレッシュし<br/>~/.claude/.credentials.json を更新
-    CLI-->>APP: 要約結果
-    APP-->>EP: 正常終了
-    EP->>EP: credentials.json の変更を検知
-    EP->>SM: PutSecretValue (リフレッシュ済みトークン)
-    Note over SM: 次回 Fargate 起動時は<br/>最新トークンを使用
+    Note over APP: Agent SDK query() が<br/>CLAUDE_CODE_OAUTH_TOKEN を直接読む
+    APP-->>EP: 要約結果
+    Note over SM: 起動毎のリフレッシュ・書き戻しは廃止
 ```
 
-- Claude CLI は `accessToken` 期限切れ時に `refreshToken` を使って自動的に新しいトークンを取得する
-- `entrypoint.sh` がタスク終了時にトークンの変更を検知し、Secrets Manager に書き戻す
-- これにより `refreshToken` が有効な限り、手動でのトークン更新は不要
-- `refreshToken` 自体が失効した場合は、ローカルで `claude auth login` を実行し Secrets Manager を手動更新する
+- トークンは ECS タスク定義の `secrets` ブロックで env に注入され、`query()` がこれを直接読む（起動毎のリフレッシュ・Secrets Manager 書き戻しは廃止）
+- `entrypoint.sh` は `unset ANTHROPIC_API_KEY` のみ行う（API キーが混入するとサブスク認証より優先されるため）
+- トークンは自動更新されないため、約1年ごとに手動で `claude setup-token` を再実行し、Secrets Manager に再投入する
 
 ## 5. Terraform 構成
 
@@ -544,16 +549,6 @@ ai-papers-digest-weight-adjuster-role
 │   └── xray:PutTraceSegments, PutTelemetryRecords
 ```
 
-#### token-refresher Lambda
-
-```
-ai-papers-digest-token-refresher-role
-├── AWSLambdaBasicExecutionRole
-├── カスタムポリシー:
-│   ├── secretsmanager:GetSecretValue, PutSecretValue → Claude credentials
-│   └── dynamodb:UpdateItem, PutItem           → pipeline_runs テーブル
-```
-
 #### auth-edge Lambda@Edge（認証）
 
 ```
@@ -572,8 +567,7 @@ ai-papers-digest-summarizer-task-role
 │   │   → papers, summaries, pipeline_runs, config テーブル
 │   │   (config は scoring_weights_history を読む Phase 3 ダッシュボード用に前倒し付与)
 │   ├── s3:PutObject                           → 詳細ページバケット（papers/*, digest/*, dashboard.html）
-│   ├── secretsmanager:GetSecretValue          → Claude 認証トークン（起動時取得）
-│   ├── secretsmanager:PutSecretValue          → Claude 認証トークン（リフレッシュ後の書き戻し）
+│   ├── secretsmanager:GetSecretValue          → Claude OAuth トークン
 │   ├── s3vectors:PutVectors, GetVectors, QueryVectors, DeleteVectors, ListVectors → S3 Vectors
 │   └── bedrock:InvokeModel                    → Bedrock Titan Embeddings V2
 ```
@@ -586,7 +580,7 @@ ai-papers-digest-summarizer-execution-role
 ├── カスタムポリシー:
 │   ├── ecr:GetAuthorizationToken, BatchGetImage, GetDownloadUrlForLayer
 │   ├── logs:CreateLogStream, PutLogEvents     → /ecs/ai-papers-digest
-│   └── secretsmanager:GetSecretValue          → Claude 認証トークン（コンテナシークレット）
+│   └── secretsmanager:GetSecretValue          → Claude OAuth トークン（コンテナシークレット注入）
 ```
 
 ## 7. シークレット管理
@@ -596,10 +590,10 @@ ai-papers-digest-summarizer-execution-role
 | `ai-papers-digest/slack-bot-token` | Slack Bot Token（chat.postMessage 用） | deliverer Lambda |
 | `ai-papers-digest/slack-signing-secret` | Slack リクエスト署名検証用 | feedback Lambda |
 | `ai-papers-digest/semantic-scholar-api-key` | Semantic Scholar API キー | collector Lambda |
-| `ai-papers-digest/claude-auth-token` | Claude Max プラン OAuth 認証トークン（`credentials.json` 全体） | Fargate summarizer（読み書き） |
+| `ai-papers-digest/claude-code-oauth-token` | Claude Max プラン OAuth トークン文字列（`claude setup-token` で生成、約1年有効） | Fargate summarizer（読み取り） |
 
 **ローテーション:**
-- Claude OAuth トークン: Fargate タスク実行時に自動リフレッシュ・書き戻し（`entrypoint.sh`）。`refreshToken` 失効時のみ手動更新が必要
+- Claude OAuth トークン: 自動更新されないため、約1年ごとに手動で `claude setup-token` を再実行し Secrets Manager に再投入する（起動毎のリフレッシュ・書き戻しは廃止）
 - Slack トークン: 手動管理。有効期限切れ検知は CloudWatch Alarm で監視
 - その他: 自動ローテーションは設定しない（手動管理）
 
@@ -691,10 +685,10 @@ graph LR
 
 | 制約 | 影響 | 対策 |
 |------|------|------|
-| API/SDK で使用不可 | Lambda から直接呼べない | ECS Fargate + `claude -p` CLI |
+| Anthropic API（従量課金）/ Bedrock では Max 枠を使えない | Max サブスクリプション枠で要約したい | ECS Fargate で Agent SDK `query()` に `CLAUDE_CODE_OAUTH_TOKEN` を渡して実行 |
 | レート制限あり（具体値は非公開） | 大量の並列要約生成が困難 | 論文間に 10秒のインターバル、1日5〜10本に制限 |
-| CLI の実行にコンテナ環境が必要 | Lambda 単体では実行困難 | Fargate タスクで実行 |
-| 認証トークンの管理 | コンテナへの安全な受け渡し | Secrets Manager → 環境変数 → 自動リフレッシュ → Secrets Manager 書き戻し |
+| Agent SDK（Node）の実行にコンテナ環境が必要 | Lambda 単体では実行困難 | Fargate タスクで実行 |
+| 認証トークンの管理 | コンテナへの安全な受け渡し | Secrets Manager → ECS タスク定義 secrets → 環境変数 `CLAUDE_CODE_OAUTH_TOKEN`（約1年ごとに手動再投入） |
 
 ### Fargate SPOT の中断リスク
 
@@ -721,7 +715,7 @@ graph LR
 |---------|---------|------------|
 | データ収集（collector） | 1〜3 分 | arXiv API レート制限（3秒/req × 5カテゴリ）、S2 batch API |
 | スコアリング（scorer） | 10〜30 秒 | DynamoDB 読み書き（十分高速） |
-| 要約生成（summarizer） | 5〜15 分 | Claude CLI 実行（1本1〜2分 × 7本 + インターバル） |
+| 要約生成（summarizer） | 5〜15 分 | Agent SDK `query()` 実行（1本1〜2分 × 7本 + インターバル） |
 | S3 ページ生成 | 30〜60 秒 | HTML テンプレート描画 + S3 PutObject |
 | Slack 配信（deliverer） | 30〜60 秒 | Slack API レート制限（1 msg/sec） |
 | **合計** | **約 8〜20 分** | 30分 SLA に対して十分な余裕 |
@@ -788,7 +782,7 @@ graph LR
 全シークレットは AWS Secrets Manager 経由で管理されている:
 - Slack Webhook URL → `ai-papers-digest/slack-webhook-url`
 - Semantic Scholar API Key → `ai-papers-digest/semantic-scholar-api-key`
-- Claude Auth Token → `ai-papers-digest/claude-auth-token`
+- Claude OAuth Token → `ai-papers-digest/claude-code-oauth-token`
 - Slack Signing Secret → `ai-papers-digest/slack-signing-secret`
 
 Lambda / Fargate には Secrets Manager の **ARN のみ** を環境変数で渡し、ランタイムで値を取得する設計。`terraform.tfvars` は `.gitignore` 対象。
@@ -841,13 +835,15 @@ sequenceDiagram
     CF->>S3: 静的取得
     S3-->>User: login.html
 
-    User->>User: PKCE code_verifier 生成、sessionStorage に保存
-    User->>Cognito: 302 /oauth2/authorize?... code_challenge=...
+    User->>User: PKCE code_verifier 生成
+    Note over User: localStorage + Path=/auth/ Cookie に保存<br/>state パラメータに verifier を base64url エンコード
+    User->>Cognito: 302 /oauth2/authorize?... code_challenge=... state=...
     Cognito-->>User: ログイン画面
     User->>Cognito: email + password
-    Cognito-->>User: 302 /auth/callback.html?code=...
+    Cognito-->>User: 302 /auth/callback.html?code=...&state=...
 
     User->>CF: GET /auth/callback.html (BYPASS)
+    Note over User: 3段階フォールバックで verifier 復元:<br/>1. localStorage (nonce 検証)<br/>2. Path=/auth/ Cookie (SFSafariViewController)<br/>3. state デコード (WKWebView 最終手段)
     User->>Cognito: POST /oauth2/token (code + code_verifier)
     Cognito-->>User: id_token / refresh_token
     User->>User: Cookie に保存 (Secure / SameSite=Lax)
@@ -857,6 +853,18 @@ sequenceDiagram
     Edge->>S3: forward
     S3-->>User: 詳細ページ
 ```
+
+### PKCE ハイブリッド 3段階フォールバック
+
+iOS モバイルブラウザのコンテキスト分離問題（WKWebView / SFSafariViewController）に対応するため、login.js / callback.js でハイブリッド方式を採用：
+
+| Tier | ストレージ | 対象環境 | CSRF 保護 |
+|---|---|---|---|
+| 1 | `localStorage` | デスクトップ・標準モバイル | nonce 検証 |
+| 2 | `Path=/auth/` Cookie (TTL 600s) | SFSafariViewController（Safari とクッキー共有） | nonce 検証 |
+| 3 | state パラメータ decode | WKWebView（ストレージ不可） | PKCE のみ |
+
+`clearPkceStorage()` が全3ストレージを一括クリア（callback 完了時 / logout 時）。
 
 ### 切り戻し設計
 
@@ -889,7 +897,6 @@ sequenceDiagram
 - summarizer: `papers_summarized` / `papers_attempted` / `claude_input_tokens` / `claude_output_tokens` / `claude_cache_read_tokens` / `claude_cache_create_tokens` / `claude_cost_usd` / `quality_results` (L of `{arxiv_id, winner, score}`)
 - deliverer: `papers_delivered`
 - weight_adjuster: `weight_adjuster_last_run` / `weight_adjuster_skipped` / `weights_after`
-- token_refresher: status のみ
 - 共通: `ttl`
 
 ### 共通ヘルパー

@@ -63,19 +63,15 @@ src/
 │   │   ├── handler.py                 #   エントリポイント。pipeline-runs に upsert + scoring_weights_history を 12 件循環で保持
 │   │   ├── weight_optimizer.py        #   ウェイト最適化ロジック
 │   │   └── requirements.txt
-│   │
-│   └── token_refresher/               # Claude OAuth トークン自動リフレッシュ Lambda
-│       ├── handler.py                 #   エントリポイント。Secrets Manager 上の credentials を期限前に refresh
-│       └── requirements.txt
 │
 ├── summarizer/                        # Fargate 要約生成コンテナ（Node.js）
 │   ├── Dockerfile                     #   コンテナイメージ定義
-│   ├── entrypoint.sh                  #   エントリポイント（トークン配置・書き戻し）
+│   ├── entrypoint.sh                  #   エントリポイント（ANTHROPIC_API_KEY を unset → アプリ実行）
 │   ├── buildspec.yml                  #   CodeBuild ビルド仕様
 │   ├── package.json                   #   npm 依存定義
 │   ├── src/
 │   │   ├── summarizer.js              #   メインエントリポイント
-│   │   ├── claude-client.js           #   claude -p CLI ラッパー（usage トークン/コスト抽出含む）
+│   │   ├── claude-client.js           #   Agent SDK query() ラッパー（usage トークン/コスト抽出含む）
 │   │   ├── dynamo-client.js           #   DynamoDB 読み書き（summaries に quality_winner / quality_score 保存）
 │   │   ├── s3-uploader.js             #   S3 HTML アップロード
 │   │   ├── html-generator.js          #   HTML テンプレートレンダリング
@@ -226,18 +222,23 @@ docs/
 
 ### `static/` — S3 静的アセット
 
+deploy.yml が `static/`（`auth/` を除く）を `s3://.../assets/` へ、`static/auth/` を `s3://.../auth/` へ同期する。
+
 ```
 static/
-├── style.css                          # 共通スタイルシート（モバイルレスポンシブ対応、ダッシュボード用 .summary-cards / .chart-grid 含む）
+├── style.css                          # 共通スタイルシート（モバイルレスポンシブ、.summary-cards / .chart-grid 含む）
 ├── search.js                          # クライアントサイド検索（lunr.js + 日本語部分文字列検索）
-├── dashboard.js                       # 監視ダッシュボード Chart.js 描画スクリプト（10チャート、空データ時メッセージ表示）
-└── auth/                              # Cognito OAuth (PKCE) フロー用静的ページ
-    ├── login.html                     # PKCE code_verifier 生成、silent refresh、Hosted UI へ 302
-    ├── callback.html                  # code → tokens 交換、Cookie 設定後 dest にリダイレクト
-    ├── logout.html                    # Cookie 削除 + Cognito Logout エンドポイント
-    ├── login.js / callback.js / logout.js
-    ├── auth-helpers.js                # PKCE / Cookie / safeDest 共通ユーティリティ
-    └── config.js                      # COGNITO_DOMAIN / CLIENT_ID / CLOUDFRONT_DOMAIN 注入用 (deploy.yml が sed)
+├── dashboard.js                       # 監視ダッシュボード Chart.js 描画（10チャート、空データ時メッセージ表示）
+├── chart.min.js                       # Chart.js v4 自己ホスト（CSP script-src 'self' 対応。CDN 不可）
+└── auth/                              # Cognito OAuth PKCE フロー用（Lambda@Edge バイパス対象）
+    ├── login.html                     # PKCE 開始。silent refresh 試行後 Hosted UI へ 302
+    ├── login.js                       # localStorage + Path=/auth/ Cookie に verifier/nonce 保存、state にも encode
+    ├── callback.html                  # トークン交換ページ
+    ├── callback.js                    # 3段階フォールバック(localStorage→Cookie→state decode)で verifier 復元、tokens 交換
+    ├── logout.html                    # ログアウトページ
+    ├── logout.js                      # localStorage/Cookie/sessionStorage クリア + Cognito Logout エンドポイント
+    ├── auth-helpers.js                # PKCE / Cookie / safeDest 共通ユーティリティ。setAuthCookie / deleteAuthCookie (Path=/auth/ TTL 600s) を含む
+    └── config.js                      # COGNITO_DOMAIN / CLIENT_ID / CLOUDFRONT_DOMAIN 注入用（deploy.yml が sed）
 ```
 
 ## 3. ファイル配置ルール
@@ -247,7 +248,7 @@ static/
 | ディレクトリ | 言語 | ランタイム | 配置するもの |
 |------------|------|-----------|------------|
 | `src/lambdas/` | Python 3.12 | AWS Lambda | 各 Lambda 関数のハンドラ + ビジネスロジック |
-| `src/summarizer/` | Node.js 22 | ECS Fargate | Claude CLI 要約生成 + HTML 生成 |
+| `src/summarizer/` | Node.js 22 | ECS Fargate | Agent SDK `query()` 要約生成 + HTML 生成 |
 | `src/shared/` | Python | - | Lambda 間で共有する定数・ユーティリティ |
 | `terraform/` | HCL | Terraform | インフラ定義のみ（アプリコードは含めない） |
 | `tests/` | Python / JavaScript | pytest / node:test | テストコードのみ |
@@ -376,7 +377,6 @@ htmlcov/
 | `src/lambdas/deliverer/` | o | o | o | o | o |
 | `src/lambdas/feedback/` | - | o | o | o | o |
 | `src/lambdas/weight_adjuster/` | - | o | o | o | o |
-| `src/lambdas/token_refresher/` | - | - | o | o | o |
 | `src/summarizer/` | o | o | o | o | o |
 | `src/summarizer/src/embedding-client.js` | - | - | o | o | o |
 | `src/summarizer/src/vectors-client.js` | - | - | o | o | o |

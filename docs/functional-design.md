@@ -22,7 +22,7 @@ graph TB
     end
 
     subgraph "要約生成（ECS Fargate）"
-        ECS[Fargate タスク<br/>Claude CLI]
+        ECS[Fargate タスク<br/>Claude Agent SDK]
     end
 
     subgraph "配信（Lambda）"
@@ -55,7 +55,7 @@ graph TB
     L2 -->|telemetry upsert| DDB
     L2 -->|次ステップ起動| ECS
     ECS -->|読取| DDB
-    ECS -->|claude -p| ECS
+    ECS -->|query()| ECS
     ECS -->|保存| DDB
     ECS -->|HTML生成・アップロード| S3
     ECS -->|telemetry upsert| DDB
@@ -139,7 +139,7 @@ sequenceDiagram
 
     loop 論文ごと(5〜10本)
         ECS->>DDB: 論文データ読取
-        ECS->>ECS: claude -p で要約生成(2層)
+        ECS->>ECS: query() で要約生成(2層)
         ECS->>DDB: summaries に保存
         ECS->>ECS: Bedrock Titan V2 で埋め込み生成(1024次元)
         ECS->>S3: S3 Vectors にベクトル保存
@@ -218,19 +218,19 @@ score = w1 × normalize(hf_upvotes)
 
 ### 3.3 要約生成 Fargate タスク（summarizer）
 
-**責務:** 選出された論文の日本語要約（2層構造）を Claude CLI で生成し、S3 に詳細ページをアップロードする
+**責務:** 選出された論文の日本語要約（2層構造）を Claude Agent SDK の `query()` で生成し、S3 に詳細ページをアップロードする
 
 **実行環境:**
 - ECS Fargate（CPU: 0.5 vCPU, Memory: 1GB）
-- Docker イメージ: Node.js ベース + Claude CLI インストール済み
-- Claude Max プランの認証情報はタスク起動時に環境変数で渡す
+- Docker イメージ: Node.js ベース + Claude Agent SDK（`@anthropic-ai/claude-agent-sdk`）を dependencies に同梱
+- Claude Max プランの OAuth トークンはタスク起動時に環境変数 `CLAUDE_CODE_OAUTH_TOKEN` で渡す
 - S3 バケットへの書き込み権限（タスクロールで付与）
 
 **処理フロー（論文ごと）:**
 1. DynamoDB から論文データ読取（タイトル、アブストラクト、TLDR、ai_summary）
 2. プロンプトを構築
-3. `claude -p --output-format json` で2層要約を同時生成
-4. JSON レスポンスをパース
+3. Agent SDK の `query()`（`options: { model, allowedTools: [], maxTurns: 1, permissionMode: "dontAsk" }`）で2層要約を同時生成
+4. `result` メッセージの `result`（文字列）から JSON を抽出・パース
 5. HF ai_summary が存在する場合、品質比較（LLM-as-judge）
 6. 最終要約を DynamoDB `summaries` テーブルに保存
 7. 詳細要約から HTML ページを生成し S3 にアップロード
@@ -271,7 +271,7 @@ score = w1 × normalize(hf_upvotes)
 **品質比較ロジック（HF ai_summary が存在する場合）:**
 
 ```
-品質スコア = claude -p で以下を評価:
+品質スコア = Agent SDK の query() で以下を評価:
   "以下の2つの要約を比較し、AIエンジニア向けの有用性を1-10で評価してください"
   → 高スコアの要約を採用（ただし2層構造テンプレートへの整形は実施）
 ```
@@ -415,10 +415,9 @@ score = w1 × normalize(hf_upvotes)
 | summarizer | `papers_summarized` / `papers_attempted` / `claude_input_tokens` / `claude_output_tokens` / `claude_cache_read_tokens` / `claude_cache_create_tokens` / `claude_cost_usd` / `quality_results` |
 | deliverer | `papers_delivered` |
 | weight_adjuster | `weight_adjuster_last_run` / `weight_adjuster_skipped` / `weights_after` |
-| token_refresher | （extra なし、status のみ） |
 
 **Claude usage 抽出（summarizer のみ）:**
-`claude -p --output-format json` の出力 envelope (`parsed.usage.{input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens}` および `parsed.total_cost_usd`) から読み取る。フィールドが無い CLI バージョンに対しては 0 でフォールバック。
+Agent SDK の `result` メッセージから `usage.{input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens}` および `total_cost_usd` を読み取る。フィールドが無い場合は 0 でフォールバック。
 
 ## 4. データモデル定義
 
@@ -531,7 +530,6 @@ erDiagram
         string weight_adjuster_last_run "YYYY-MM-DD"
         boolean weight_adjuster_skipped "ウェイト変更なし"
         map weights_after "更新後 {w1,w2,w3,w4}"
-        string token_refresher_status "success/skipped/error"
         int ttl "epoch 秒、90日後に自動削除"
     }
 ```
@@ -838,7 +836,7 @@ graph TD
 |-----------|---------|------|------|
 | API レート制限 | collector | 指数バックオフで自動リトライ（最大3回） | 3回失敗で CloudWatch Alarm |
 | API タイムアウト | collector | 30秒タイムアウト、該当ソースをスキップして続行 | ログ記録のみ |
-| Claude CLI エラー | summarizer | 論文単位でリトライ（最大2回）、失敗論文はスキップ | 3本以上失敗で Alarm |
+| Agent SDK `query()` エラー | summarizer | 論文単位でリトライ（最大2回）、失敗論文はスキップ | 3本以上失敗で Alarm |
 | Claude レート制限 | summarizer | 論文間に30秒のインターバルを設定 | ログ記録 |
 | Slack 配信失敗 | deliverer | リトライ（最大3回） | 即座に Alarm |
 | DynamoDB スロットリング | 全体 | SDK自動リトライ + バックオフ | 頻発時に Alarm |
@@ -881,11 +879,12 @@ sequenceDiagram
     E-->>U: 302 /auth/login.html?dest=/papers/2604.xxx.html
     U->>CF: GET /auth/login.html (BYPASS)
     CF->>S: 静的取得
-    U->>U: PKCE code_verifier 生成 + sessionStorage
-    U->>C: 302 /oauth2/authorize?code_challenge=...
+    U->>U: PKCE code_verifier 生成 + localStorage + Path=/auth/ Cookie
+    U->>C: 302 /oauth2/authorize?code_challenge=... state=(nonce+verifier+dest)
     C-->>U: ログイン画面
     U->>C: email + password
     C-->>U: 302 /auth/callback.html?code=...
+    Note over U: 3段階フォールバックで verifier 復元:<br/>1.localStorage(nonce検証) 2.Cookie(SFSafariVC) 3.stateデコード(WKWebView)
     U->>C: POST /oauth2/token (code + verifier)
     C-->>U: id_token / refresh_token
     U->>U: Cookie に保存 (Secure / SameSite=Lax)

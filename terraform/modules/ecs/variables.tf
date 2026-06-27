@@ -38,7 +38,7 @@ variable "detail_page_base_url" {
 }
 
 variable "secrets_manager_arn" {
-  description = "ARN of the Secrets Manager secret containing CLAUDE_ACCESS_TOKEN"
+  description = "ARN of the Secrets Manager secret containing CLAUDE_CODE_OAUTH_TOKEN (Agent SDK subscription auth)"
   type        = string
 }
 
